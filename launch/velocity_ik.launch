@@ -1,0 +1,13 @@
+<launch>
+  <node pkg="pinocchio_ik" exec="velocity_ik" output="screen">
+    <param name="end_effector_link" value="xarm6_link6"/>
+    <remap from="robot_description" to="/robot_description"/>
+    <remap from="joint_states" to="/joint_states"/>
+    <!-- depending on the control configuration, either velocity or position is active at a time -->
+    <remap from="joint_velocity_cmd" to="/xarm6_velocity_controller/commands"/>
+    <remap from="joint_position_cmd" to="/xarm6_position_controller/commands"/>
+    <remap from="desired_twist" to="/desired_twist"/>
+    <param name="rate" value="100.0"/>
+    <param name="is_world" value="true"/>
+  </node>
+</launch>

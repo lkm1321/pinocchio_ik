@@ -1,0 +1,8 @@
+<launch>
+    <node pkg="pinocchio_ik" exec="distance_cbf" output="screen">
+        <!-- <param name="robot_description" value="$(arg robot_description)" /> -->
+        <remap from="joint_states" to="/joint_states" />
+        <remap from="filtered_joint_velocity" to="/velocity_controller/commands"/>
+        <remap from="nominal_joint_velocity" to="/velocity_controller/commands_nominal" />
+    </node>
+</launch>

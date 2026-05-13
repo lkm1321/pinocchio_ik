@@ -1,0 +1,25 @@
+[tool.pixi.workspace]
+name = "pinocchio_ik"
+version = "0.0.0"
+description = "Pinocchio-based FK CBF and velocity IK. The pixi env is for running the Python-only (non-ROS) test/example scripts."
+authors = ["Brian Lee <brian@erl-brian.ucsd.edu>"]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.dependencies]
+python = "3.10.*"
+numpy = "*"
+scipy = "*"
+pinocchio = "*"
+cvxpy = "*"
+osqp = "*"
+meshcat-python = "*"
+matplotlib = "*"
+pip = "*"
+
+[tool.pixi.pypi-dependencies]
+urdf-parser-py = "*"
+
+[tool.pixi.tasks]
+test-cbf = { cmd = "python test/test_cbf.py", description = "Run the Python-only FK CBF demo against test/two_manipulator_arm.urdf" }
+test-pointcloud-sdf = { cmd = "python test/test_pointcloud_sdf.py", description = "Visualize PointCloudSDF on a 2D slice and run the FK CBF using it" }
