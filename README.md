@@ -38,6 +38,26 @@ modules — you can drive it directly from Python. The pixi env in `pyproject.to
 pulls pinocchio, cvxpy, osqp, meshcat-python, matplotlib, and `urdf-parser-py`
 from conda-forge / PyPI.
 
+### Installing pixi
+
+If you don't already have `pixi`, install it once (no admin / sudo needed; it
+drops a single binary into `~/.pixi/bin`):
+
+```bash
+# Linux / macOS
+curl -fsSL https://pixi.sh/install.sh | bash
+
+# Windows (PowerShell)
+iwr -useb https://pixi.sh/install.ps1 | iex
+```
+
+After installing, restart your shell (or `source ~/.bashrc` / `~/.zshrc`) so
+`~/.pixi/bin` is on `PATH`, then verify with `pixi --version`. Alternative
+installers (Homebrew, `winget`, etc.) are listed at
+[pixi.sh/latest/installation](https://pixi.sh/latest/installation/).
+
+### Running the demos
+
 ```bash
 pixi install
 pixi run test-cbf                          # FK CBF with an analytic sphere SDF
