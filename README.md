@@ -5,6 +5,7 @@ for collision avoidance. Ships as a ROS 2 (`ament_python`) package, but the CBF 
 is pure Python and can be exercised standalone via the included pixi environment.
 
 ![two-link FK CBF demo](assets/two-link.gif)
+![xarm6 FK CBF demo](assets/xarm6.gif)
 
 ## Layout
 
@@ -18,6 +19,7 @@ test/
   two_manipulator_arm.urdf   Toy planar 2-link arm used by the demos
   test_cbf.py                FK CBF demo with an analytic obstacle SDF
   test_pointcloud_sdf.py     FK CBF demo with a KDTree SDF over a sampled obstacle
+  test_xarm6_cbf.py          FK CBF on the xArm6 going over a spherical obstacle
   test_webgl.py              Generates webgl_check.html for browser-side WebGL diagnosis
 launch/
   *.launch                   ROS 2 launch files
@@ -65,6 +67,8 @@ pixi install
 pixi run test-cbf                          # FK CBF with an analytic sphere SDF
 pixi run test-pointcloud-sdf               # FK CBF + live meshcat viewer (default)
 pixi run test-pointcloud-sdf --no-meshcat   # skip the meshcat animation
+pixi run test-xarm6-cbf                    # FK CBF on the xArm6 + live meshcat viewer (default)
+pixi run test-xarm6-cbf --no-meshcat        # xArm6 demo, headless (plot only)
 pixi run test-webgl                        # browser-side WebGL diagnostic
 ```
 
@@ -92,6 +96,8 @@ pip install -e ".[test]"            # same, plus pytest
 python test/test_cbf.py
 python test/test_pointcloud_sdf.py                # meshcat viewer (default)
 python test/test_pointcloud_sdf.py --no-meshcat   # plot only, no browser
+python test/test_xarm6_cbf.py                     # xArm6 sphere-avoidance demo (meshcat default)
+python test/test_xarm6_cbf.py --no-meshcat        # plot only, no browser
 python test/test_webgl.py
 ```
 
@@ -105,6 +111,8 @@ PNG into `test/`:
   around an analytic spherical obstacle.
 - `test/test_pointcloud_sdf.png` — the `PointCloudSDF` evaluated on a z=0 slice
   with the cloud samples and the FK CBF rollout overlaid.
+- `test/test_xarm6_cbf_trajectory.png` — xArm6 EE trajectory deflected up and
+  over a spherical obstacle on the midline of the nominal joint-space sweep.
 
 ## Minimal Python API
 

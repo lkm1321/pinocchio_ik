@@ -55,4 +55,5 @@ urdf-parser-py = "*"
 [tool.pixi.tasks]
 test-cbf = { cmd = "python test/test_cbf.py", description = "Run the Python-only FK CBF demo against test/two_manipulator_arm.urdf" }
 test-pointcloud-sdf = { cmd = "python test/test_pointcloud_sdf.py", description = "Visualize PointCloudSDF on a 2D slice and run the FK CBF using it" }
+test-xarm6-cbf = { cmd = "python test/test_xarm6_cbf.py", description = "Run the FK CBF on the xArm6 with a spherical workspace obstacle" }
 test-webgl = { cmd = "python test/test_webgl.py", description = "Generate a standalone WebGL diagnostic page to open in your browser" }
