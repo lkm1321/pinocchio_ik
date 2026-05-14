@@ -40,11 +40,15 @@ from conda-forge / PyPI.
 
 ```bash
 pixi install
-pixi run test-cbf                       # FK CBF with an analytic sphere SDF
-pixi run test-pointcloud-sdf            # FK CBF with a KDTree SDF over a point cloud
-pixi run test-pointcloud-sdf -- --meshcat   # same, plus live meshcat viewer
-pixi run test-webgl                     # browser-side WebGL diagnostic
+pixi run test-cbf                          # FK CBF with an analytic sphere SDF
+pixi run test-pointcloud-sdf               # FK CBF + live meshcat viewer (default)
+pixi run test-pointcloud-sdf --no-meshcat   # skip the meshcat animation
+pixi run test-webgl                        # browser-side WebGL diagnostic
 ```
+
+`test-pointcloud-sdf` opens a meshcat browser window by default and animates
+the FK CBF rollout against the obstacle point cloud. Pass `--no-meshcat` if
+you only want the matplotlib PNG (headless runs, CI, etc.).
 
 ### Alternative: pip + venv
 
@@ -64,8 +68,8 @@ pip install -e ".[test]"            # same, plus pytest
 
 # Run the same demos directly (no pixi wrapper):
 python test/test_cbf.py
-python test/test_pointcloud_sdf.py
-python test/test_pointcloud_sdf.py --meshcat
+python test/test_pointcloud_sdf.py                # meshcat viewer (default)
+python test/test_pointcloud_sdf.py --no-meshcat   # plot only, no browser
 python test/test_webgl.py
 ```
 
@@ -105,9 +109,10 @@ u_safe = cbf.get_control(q, u_nominal)         # QP-filtered joint velocity
 
 ## Meshcat / WebGL
 
-`pixi run test-pointcloud-sdf -- --meshcat` opens a browser to a thin wrapper
-page (`test/meshcat_wrapper.html`) that iframes the live meshcat URL and runs a
-WebGL probe in the outer page. If WebGL is unavailable, a yellow banner appears
-above the iframe instead of leaving the user staring at a blank canvas. For
-deeper diagnosis run `pixi run test-webgl` and open the resulting
-`test/webgl_check.html` in the same browser.
+`pixi run test-pointcloud-sdf` (meshcat is on by default; use `--no-meshcat` to
+suppress) opens a browser to a thin wrapper page (`test/meshcat_wrapper.html`)
+that iframes the live meshcat URL and runs a WebGL probe in the outer page.
+If WebGL is unavailable, a yellow banner appears above the iframe instead of
+leaving the user staring at a blank canvas. For deeper diagnosis run
+`pixi run test-webgl` and open the resulting `test/webgl_check.html` in the
+same browser.

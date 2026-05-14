@@ -35,7 +35,13 @@ def main():
     parser.add_argument("--urdf", default=None)
     parser.add_argument("--n-points", type=int, default=500)
     parser.add_argument("--buffer", type=float, default=0.0)
-    parser.add_argument("--meshcat", action="store_true", help="Animate the trajectory and point cloud in Meshcat")
+    parser.add_argument(
+        "--meshcat",
+        dest="meshcat",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Animate the trajectory and point cloud in Meshcat (default: on; pass --no-meshcat to disable)",
+    )
     args = parser.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
