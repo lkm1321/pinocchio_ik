@@ -17,6 +17,7 @@ import numpy as np
 import pinocchio
 from urdf_parser_py import urdf
 
+from pinocchio_ik.meshcat_utils import open_meshcat_with_webgl_probe
 from pinocchio_ik.qpcbf import PinocchioFKCBF, PointCloudSDF
 
 
@@ -70,24 +71,17 @@ def main():
     _save_plot(controller, sdf, points, center, radius, solutions, here)
 
     if args.meshcat:
-        _animate_meshcat(model, collision_model, visual_model, points, solutions)
+        _animate_meshcat(model, collision_model, visual_model, points, solutions, here)
 
 
-def _animate_meshcat(model, collision_model, visual_model, points, solutions):
-    import meshcat
+def _animate_meshcat(model, collision_model, visual_model, points, solutions, out_dir):
     import meshcat.geometry as mg
     from pinocchio.visualize import MeshcatVisualizer
 
-    # Spawn the server ourselves so we can print its URL up front.
-    server = meshcat.Visualizer()
-    print()
-    print("=" * 60)
-    print(f"Open Meshcat at: {server.url()}")
-    print("=" * 60)
-    print()
-
     viz = MeshcatVisualizer(model, collision_model=collision_model, visual_model=visual_model)
-    viz.initViewer(viewer=server, loadModel=True)
+    viz.initViewer(open=False)
+    viz.loadViewerModel()
+
     viz.displayCollisions(True)
     viz.displayVisuals(True)
     viz.display(solutions[0])
@@ -100,12 +94,22 @@ def _animate_meshcat(model, collision_model, visual_model, points, solutions):
         )
     )
 
-    # Give the user a chance to open the URL before animating.
-    print("Press Enter to start the animation loop (Ctrl-C to exit when done).")
-    try:
-        input()
-    except EOFError:
-        pass
+    wrapper_path = open_meshcat_with_webgl_probe(
+        viz.viewer.url(), os.path.join(out_dir, "meshcat_wrapper.html"),
+    )
+
+    print()
+    print("=" * 64)
+    print(f"Meshcat (raw)         : {viz.viewer.url()}")
+    print(f"Wrapper w/ WebGL probe: file://{wrapper_path}")
+    print("=" * 64)
+    print()
+    # print("Open one of the above, then press Enter to animate (Ctrl-C to exit).")
+    # sys.stdout.flush()
+    # try:
+    #     input()
+    # except EOFError:
+    #     pass
 
     idx = 0
     try:

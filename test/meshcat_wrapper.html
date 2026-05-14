@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Meshcat (with WebGL probe)</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: monospace; }
+  #banner { display: none; padding: 14px; background: #fff3cd; color: #8a4b00;
+            border-bottom: 2px solid #c00; font-size: 14px; }
+  #frame  { display: block; width: 100vw; height: 100vh; border: 0; }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<iframe id="frame" src="http://127.0.0.1:7012/static/"></iframe>
+<script>
+(function() {
+  var gl = null;
+  try {
+    var c = document.createElement('canvas');
+    gl = c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl');
+  } catch (e) {}
+  if (gl) return;
+  var b = document.getElementById('banner');
+  b.style.display = 'block';
+  b.innerHTML = '<b>WebGL is not available in this browser.</b> '
+    + 'Meshcat (loaded below) cannot render the scene. '
+    + 'Check <code>chrome://gpu</code> / <code>about:support</code> for details.';
+  document.getElementById('frame').style.height = 'calc(100vh - 60px)';
+})();
+</script>
+</body>
+</html>
