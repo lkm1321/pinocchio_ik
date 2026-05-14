@@ -4,6 +4,8 @@ Pinocchio-based velocity IK and forward-kinematics Control Barrier Function (FK 
 for collision avoidance. Ships as a ROS 2 (`ament_python`) package, but the CBF core
 is pure Python and can be exercised standalone via the included pixi environment.
 
+![two-link FK CBF demo](assets/two-link.gif)
+
 ## Layout
 
 ```
