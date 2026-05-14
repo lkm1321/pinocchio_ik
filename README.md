@@ -46,6 +46,32 @@ pixi run test-pointcloud-sdf -- --meshcat   # same, plus live meshcat viewer
 pixi run test-webgl                     # browser-side WebGL diagnostic
 ```
 
+### Alternative: pip + venv
+
+If you'd rather not install pixi, the same Python-only deps can be installed
+with `pip` into a standard virtual environment. Requires **Python 3.10+** (the
+pixi env pins 3.10; newer 3.x should also work). Note that `pip` pulls
+`pinocchio` from PyPI as `pin`, which is a manylinux wheel — on platforms
+without a wheel (e.g. some ARM / older glibc setups) you'll need to use pixi /
+conda-forge instead.
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -e .                    # installs deps from pyproject.toml
+pip install -e ".[test]"            # same, plus pytest
+
+# Run the same demos directly (no pixi wrapper):
+python test/test_cbf.py
+python test/test_pointcloud_sdf.py
+python test/test_pointcloud_sdf.py --meshcat
+python test/test_webgl.py
+```
+
+Verify the venv is active with `which python` — it should point inside
+`.venv/bin/`, not `/usr/bin/python`.
+
 Each demo prints what it computed and (where applicable) writes a matplotlib
 PNG into `test/`:
 
