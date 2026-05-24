@@ -8,6 +8,12 @@
   <license>Apache License 2.0</license>
 
   <depend>pinocchio</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <!-- vr_twist_publisher additionally needs the pyopenvr PyPI package
+       (pip install openvr) and a SteamVR runtime; no rosdep key exists. -->
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
