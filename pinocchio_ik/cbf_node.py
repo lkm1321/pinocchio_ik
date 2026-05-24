@@ -14,7 +14,8 @@ from scipy.spatial.distance import cdist
 # You may need to install this: pip install ros2-numpy
 import ros2_numpy
 
-from pinocchio_ik.qpcbf import PinocchioFKCBF, PointCloudSDF, table_sdf
+from pinocchio_ik.pointcloud_sdf import PointCloudSDF
+from pinocchio_ik.qpcbf import PinocchioFKCBF, table_sdf
 
 
 class PointCloudKDTreeNode(Node):

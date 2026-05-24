@@ -18,7 +18,8 @@ import pinocchio
 from urdf_parser_py import urdf
 
 from pinocchio_ik.meshcat_utils import open_meshcat_with_webgl_probe
-from pinocchio_ik.qpcbf import PinocchioFKCBF, PointCloudSDF
+from pinocchio_ik.pointcloud_sdf import PointCloudSDF
+from pinocchio_ik.qpcbf import PinocchioFKCBF
 
 
 def sample_sphere_surface(center, radius, n_points, seed=0):
