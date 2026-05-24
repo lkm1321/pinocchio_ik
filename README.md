@@ -22,7 +22,7 @@ test/
   test_xarm6_cbf.py          FK CBF on the xArm6 going over a spherical obstacle
   test_webgl.py              Generates webgl_check.html for browser-side WebGL diagnosis
 launch/
-  *.launch                   ROS 2 launch files
+  *.launch.xml               ROS 2 launch files
   xarm6_with_gripper_spherized.urdf   xArm6 with collision spheres
 ```
 

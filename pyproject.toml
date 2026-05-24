@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pinocchio_ik"
-version = "0.0.0"
+version = "0.0.1"
 description = "Pinocchio-based FK CBF and velocity IK. The pixi env is for running the Python-only (non-ROS) test/example scripts."
 authors = [{ name = "Brian Lee", email = "brian@erl-brian.ucsd.edu" }]
 license = { text = "Apache License 2.0" }
