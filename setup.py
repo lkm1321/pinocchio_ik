@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'velocity_ik = pinocchio_ik.velocity_ik:main',
             'distance_cbf = pinocchio_ik.cbf_node:main',
+            'distance_cbf_service = pinocchio_ik.distance_cbf_service:main',
             'vr_twist_publisher = pinocchio_ik.vr_twist_publisher:main',
         ],
     },

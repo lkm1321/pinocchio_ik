@@ -269,6 +269,7 @@ class DistanceCBFNode(Node):
 
     def filter_and_publish(self, nominal_velocity):
         filtered_msg = Float64MultiArray()
+        zero = [0.] * len(self.controller.controlled_joint_idxs)
         try:
             control = self.controller.get_control(
                 self.current_joint_state,
@@ -276,9 +277,19 @@ class DistanceCBFNode(Node):
             )
             filtered_msg.data = control.tolist()
         except ValueError as e:
-            self.get_logger().error("Infeasible control problem. Cannot compute filtered joint velocity.")
-            self.get_logger().error(f"{e}")
-            filtered_msg.data = [0.] * len(self.controller.controlled_joint_idxs)
+            self.get_logger().error(
+                f"Infeasible CBF QP; publishing zero velocity: {e}"
+            )
+            filtered_msg.data = zero
+        except Exception as e:
+            # Covers SDF failures (TimeoutError, RuntimeError, …) raised
+            # from inside controller.get_control() via env_sdf, plus any
+            # other unexpected error. Fail safe: zero velocity.
+            self.get_logger().error(
+                f"SDF/controller error; publishing zero velocity: "
+                f"{type(e).__name__}: {e}"
+            )
+            filtered_msg.data = zero
 
         self.filtered_joint_velocity_pub.publish(filtered_msg)
 
