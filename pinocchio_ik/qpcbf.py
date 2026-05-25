@@ -22,6 +22,13 @@ class QPCBF:
         self.last_solve_time = 0.0
         self.last_total_time = 0.0
 
+        # Per-call dual variables of the CBF inequality, indexed in the
+        # same order as the rows of A / entries of b. Strictly-positive
+        # duals mark active (binding) constraints; used by DistanceCBFNode
+        # to draw a line from each constrained sphere to its nearest
+        # obstacle point. None when the QP was infeasible.
+        self.last_cbf_dual = None
+
         # get_control rebuilds the cvxpy Problem from scratch each call, so
         # we do NOT need to size cp.Parameters here — and doing so eagerly
         # would force an SDF query at construction time, which is fragile
@@ -56,6 +63,12 @@ class QPCBF:
         self.last_build_time = t2 - t1
         self.last_solve_time = t3 - t2
         self.last_total_time = t3 - t0
+
+        # dual_value on a `>= 0` cvxpy constraint is non-negative; entries
+        # strictly above the active threshold mean the inequality is tight
+        # at the optimum (the corresponding sphere is currently shaping
+        # the QP solution). May be None when the solve failed.
+        self.last_cbf_dual = constraints[0].dual_value
 
         if self.control.value is not None:
             return self.control.value
@@ -181,9 +194,14 @@ class PinocchioFKCBF:
         # last_sphere_pos:    (N, 3) world-frame sphere centers
         # last_sphere_radii:  (N,)   sphere radii (same order)
         # last_sphere_h:      (N,)   h = d_env - r  (sphere-surface clearance)
+        # last_sphere_dist:   (N,)   raw SDF value at sphere center (no radius subtraction)
+        # last_sphere_grad:   (N, 3) SDF gradient at sphere center; nearest
+        #                            obstacle point is pos - dist * grad.
         self.last_sphere_pos = None
         self.last_sphere_radii = None
         self.last_sphere_h = None
+        self.last_sphere_dist = None
+        self.last_sphere_grad = None
 
         self.get_control = self.controller.get_control
 
@@ -338,6 +356,8 @@ class PinocchioFKCBF:
             self.last_sphere_pos = batched_pos
             self.last_sphere_radii = batched_radii
             self.last_sphere_h = batched_dist - batched_radii
+            self.last_sphere_dist = batched_dist
+            self.last_sphere_grad = batched_grad
 
             cursor = 0
             for sphere_pos_world, spatial_jacobian, radii in per_link:

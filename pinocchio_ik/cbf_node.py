@@ -9,6 +9,7 @@ import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy
+from geometry_msgs.msg import Point
 from std_msgs.msg import String, Float64MultiArray
 from sensor_msgs.msg import JointState, PointCloud2
 from visualization_msgs.msg import Marker, MarkerArray
@@ -276,6 +277,13 @@ class DistanceCBFNode(Node):
         self.declare_parameter('sphere_marker_d_red', 0.1)
         self.declare_parameter('sphere_marker_d_black', 2.0)
         self.declare_parameter('sphere_marker_rate_hz', 20.0)
+        # Dual-variable threshold for "active" CBF constraints. cvxpy returns
+        # dual_value ≥ 0 on a `>= 0` inequality; strictly-positive duals are
+        # binding. The threshold rejects numerical noise from OSQP.
+        self.declare_parameter('active_dual_threshold', 1e-4)
+        self.active_dual_threshold = float(
+            self.get_parameter('active_dual_threshold').value
+        )
         self.publish_sphere_markers = bool(
             self.get_parameter('publish_sphere_markers').value
         )
@@ -507,7 +515,66 @@ class DistanceCBFNode(Node):
             m.color.b = float(colors[i, 2])
             m.color.a = 0.7
             arr.markers.append(m)
+
+        active_marker = self._build_active_constraint_marker(
+            pos, frame_id, stamp,
+        )
+        if active_marker is not None:
+            arr.markers.append(active_marker)
+
         self.sphere_marker_pub.publish(arr)
+
+    def _build_active_constraint_marker(self, pos, frame_id, stamp):
+        """LINE_LIST from each active sphere center to its nearest obstacle.
+
+        Active = the per-sphere CBF inequality has strictly-positive dual.
+        Nearest obstacle point is `pos - dist * grad` (signed distance
+        retracted along the SDF gradient). Returns None if the QP didn't
+        produce duals (e.g. infeasible) or if the SDF data isn't available.
+
+        Always returns *some* marker (DELETE when nothing is active) so
+        previously-rendered lines vanish from RViz the moment the
+        constraint stops binding.
+        """
+        dist = getattr(self.controller, 'last_sphere_dist', None)
+        grad = getattr(self.controller, 'last_sphere_grad', None)
+        inner = getattr(self.controller, 'controller', None)
+        dual = getattr(inner, 'last_cbf_dual', None) if inner is not None else None
+        if dist is None or grad is None or dual is None:
+            return None
+
+        marker = Marker()
+        marker.header.frame_id = frame_id
+        marker.header.stamp = stamp
+        marker.ns = 'cbf_active_constraints'
+        marker.id = 0
+        marker.type = Marker.LINE_LIST
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.005          # line width [m]
+        marker.color.r = 0.2
+        marker.color.g = 1.0
+        marker.color.b = 0.2
+        marker.color.a = 1.0
+
+        dual_arr = np.asarray(dual, dtype=float)
+        if dual_arr.shape != (len(pos),):
+            return None
+
+        active_idxs = np.where(dual_arr > self.active_dual_threshold)[0]
+        if active_idxs.size == 0:
+            marker.action = Marker.DELETE
+            return marker
+
+        marker.action = Marker.ADD
+        nearest = pos - dist[:, None] * grad
+        for i in active_idxs:
+            p0 = Point()
+            p0.x, p0.y, p0.z = float(pos[i, 0]), float(pos[i, 1]), float(pos[i, 2])
+            p1 = Point()
+            p1.x, p1.y, p1.z = float(nearest[i, 0]), float(nearest[i, 1]), float(nearest[i, 2])
+            marker.points.append(p0)
+            marker.points.append(p1)
+        return marker
 
     def _hot_colors_for_clearance(self, h):
         """Map per-sphere clearance to RGB via matplotlib's 'hot' colormap.
