@@ -1,0 +1,82 @@
+<launch>
+  <!-- Same chain as cbf_chain.launch.xml, but the CBF talks to the
+       erl_gp_sdf_ros mapping node via its Cap'n Proto RPC server instead
+       of the ROS 2 service. Lower per-call overhead, but requires the
+       mapping node started with `capnp_rpc.enabled: true` (see
+       erl_gp_sdf_ros/config/xarm/ros_params.yaml).
+
+         desired_twist  →  velocity_ik  →  nominal joint-vel  →
+                           distance_cbf_capnp  →  filtered joint-vel  →
+                           velocity_controller
+
+       Both velocity_ik and distance_cbf_capnp have watchdogs that fall
+       back to zero command if their control loop stalls.
+
+       Defaults match the real xArm6 deploy (unprefixed joints,
+       /joint_states, /cmd_vel). Override the args to point at a
+       prefixed setup. -->
+
+  <!-- Robot config -->
+  <arg name="end_effector_link" default="link6" />
+  <arg name="controlled_joint_names"
+       default="[joint1, joint2, joint3, joint4, joint5, joint6]" />
+  <arg name="urdf_path"
+       default="/keti_ws/src/pinocchio_ik/launch/xarm6_with_gripper_spherized.urdf" />
+  <arg name="ee_frame_name" default="xarm6_ee_tip" />
+
+  <!-- Topic wiring -->
+  <arg name="desired_twist_topic"        default="/cmd_vel" />
+  <arg name="joint_states_topic"         default="/joint_states" />
+  <arg name="nominal_cmd_topic"          default="/velocity_controller/commands_nominal" />
+  <arg name="filtered_cmd_topic"         default="/velocity_controller/commands" />
+  <arg name="robot_description_topic"    default="/robot_description" />
+
+  <!-- Cap'n Proto endpoint -->
+  <arg name="sdf_host" default="127.0.0.1"
+       description="Address of the erl_gp_sdf_ros capnp RPC server." />
+  <arg name="sdf_port" default="51111"
+       description="Port of the erl_gp_sdf_ros capnp RPC server." />
+  <arg name="sdf_schema_path" default=""
+       description="Override path to sdf_query.capnp. Empty = autodiscover." />
+
+  <!-- Tuning -->
+  <arg name="rate" default="100.0" />
+  <arg name="is_world" default="true" />
+  <arg name="use_sim_time" default="false" />
+  <arg name="watchdog_timeout_sec" default="0.0" />
+  <arg name="sdf_timeout_sec" default="15.0" />
+  <arg name="sdf_wait_for_server_sec" default="60.0" />
+  <arg name="alpha_gain" default="2.0"
+       description="Class-K gain for the CBF: alpha(h) = alpha_gain * h." />
+
+  <!-- 1) Cartesian twist → joint-velocity nominal -->
+  <include file="$(find-pkg-share pinocchio_ik)/launch/velocity_ik.launch.xml">
+    <arg name="end_effector_link"        value="$(var end_effector_link)"/>
+    <arg name="rate"                     value="$(var rate)"/>
+    <arg name="is_world"                 value="$(var is_world)"/>
+    <arg name="use_sim_time"             value="$(var use_sim_time)"/>
+    <arg name="watchdog_timeout_sec"     value="$(var watchdog_timeout_sec)"/>
+    <arg name="controlled_joint_names"   value="$(var controlled_joint_names)"/>
+    <arg name="desired_twist_topic"      value="$(var desired_twist_topic)"/>
+    <arg name="joint_states_topic"       value="$(var joint_states_topic)"/>
+    <arg name="joint_velocity_cmd_topic" value="$(var nominal_cmd_topic)"/>
+    <arg name="robot_description_topic"  value="$(var robot_description_topic)"/>
+  </include>
+
+  <!-- 2) GP-SDF QP filter via capnp RPC -->
+  <include file="$(find-pkg-share pinocchio_ik)/launch/distance_cbf_capnp.launch.xml">
+    <arg name="urdf_path"                value="$(var urdf_path)"/>
+    <arg name="controlled_joint_names"   value="$(var controlled_joint_names)"/>
+    <arg name="ee_frame_name"            value="$(var ee_frame_name)"/>
+    <arg name="sdf_host"                 value="$(var sdf_host)"/>
+    <arg name="sdf_port"                 value="$(var sdf_port)"/>
+    <arg name="sdf_schema_path"          value="$(var sdf_schema_path)"/>
+    <arg name="joint_states_topic"       value="$(var joint_states_topic)"/>
+    <arg name="filtered_cmd_topic"       value="$(var filtered_cmd_topic)"/>
+    <arg name="nominal_cmd_topic"        value="$(var nominal_cmd_topic)"/>
+    <arg name="use_sim_time"             value="$(var use_sim_time)"/>
+    <arg name="sdf_timeout_sec"          value="$(var sdf_timeout_sec)"/>
+    <arg name="sdf_wait_for_server_sec"  value="$(var sdf_wait_for_server_sec)"/>
+    <arg name="alpha_gain"               value="$(var alpha_gain)"/>
+  </include>
+</launch>

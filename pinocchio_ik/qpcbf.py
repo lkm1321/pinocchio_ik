@@ -176,6 +176,15 @@ class PinocchioFKCBF:
         self.last_sdf_time = 0.0
         self.last_pin_time = 0.0
 
+        # Per-call per-sphere state populated by build_matrix(); read by
+        # DistanceCBFNode for the cbf_spheres marker visualization.
+        # last_sphere_pos:    (N, 3) world-frame sphere centers
+        # last_sphere_radii:  (N,)   sphere radii (same order)
+        # last_sphere_h:      (N,)   h = d_env - r  (sphere-surface clearance)
+        self.last_sphere_pos = None
+        self.last_sphere_radii = None
+        self.last_sphere_h = None
+
         self.get_control = self.controller.get_control
 
     @classmethod
@@ -314,6 +323,7 @@ class PinocchioFKCBF:
 
         if all_sphere_pos:
             batched_pos = np.concatenate(all_sphere_pos, axis=0)  # (sum_N, 3)
+            batched_radii = np.concatenate([r for _, _, r in per_link], axis=0)
 
             t_sdf = time.perf_counter()
             if self.env_grad is not None:
@@ -324,6 +334,10 @@ class PinocchioFKCBF:
                 batched_dist, batched_grad = self.env_sdf(batched_pos)
                 self.last_sdf_calls += 1
             self.last_sdf_time += time.perf_counter() - t_sdf
+
+            self.last_sphere_pos = batched_pos
+            self.last_sphere_radii = batched_radii
+            self.last_sphere_h = batched_dist - batched_radii
 
             cursor = 0
             for sphere_pos_world, spatial_jacobian, radii in per_link:

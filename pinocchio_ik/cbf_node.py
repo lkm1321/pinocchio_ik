@@ -11,6 +11,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from std_msgs.msg import String, Float64MultiArray
 from sensor_msgs.msg import JointState, PointCloud2
+from visualization_msgs.msg import Marker, MarkerArray
 from scipy.spatial.distance import cdist
 
 from pinocchio_ik.pointcloud_sdf import PointCloudSDF
@@ -265,6 +266,41 @@ class DistanceCBFNode(Node):
             10
         )
 
+        # Sphere-marker visualization: each CBF collision sphere is published
+        # as a Marker.SPHERE coloured by per-sphere clearance h = d_env - r.
+        # Mapping uses matplotlib's 'hot' colormap: black (h = d_black, safe)
+        # → red (h = d_red, danger) → yellow/white (h < d_red, extrapolated).
+        # publish_sphere_markers=False or marker_rate_hz<=0 disables it.
+        self.declare_parameter('publish_sphere_markers', True)
+        self.declare_parameter('sphere_marker_topic', 'cbf_spheres')
+        self.declare_parameter('sphere_marker_d_red', 0.1)
+        self.declare_parameter('sphere_marker_d_black', 2.0)
+        self.declare_parameter('sphere_marker_rate_hz', 20.0)
+        self.publish_sphere_markers = bool(
+            self.get_parameter('publish_sphere_markers').value
+        )
+        self.sphere_marker_d_red = float(
+            self.get_parameter('sphere_marker_d_red').value
+        )
+        self.sphere_marker_d_black = float(
+            self.get_parameter('sphere_marker_d_black').value
+        )
+        marker_rate = float(self.get_parameter('sphere_marker_rate_hz').value)
+        self._sphere_marker_period_s = (
+            1.0 / marker_rate if (self.publish_sphere_markers and marker_rate > 0.0)
+            else None
+        )
+        self._last_sphere_marker_t = 0.0
+        if self.publish_sphere_markers and self._sphere_marker_period_s is not None:
+            self.sphere_marker_pub = self.create_publisher(
+                MarkerArray,
+                self.get_parameter('sphere_marker_topic')
+                    .get_parameter_value().string_value,
+                10,
+            )
+        else:
+            self.sphere_marker_pub = None
+
         # Filter timer runs at 100Hz on its own callback group so the
         # subscriptions can dispatch on the executor's other thread while
         # the QP is in flight. Per-cycle staleness check (see _STALE_S)
@@ -431,6 +467,72 @@ class DistanceCBFNode(Node):
 
         self._last_nom_norm = float(np.linalg.norm(np.asarray(nominal_velocity)))
         self._last_filt_norm = float(np.linalg.norm(np.asarray(filtered_msg.data)))
+
+        self._maybe_publish_sphere_markers()
+
+    def _maybe_publish_sphere_markers(self):
+        if self.sphere_marker_pub is None:
+            return
+        now = time.monotonic()
+        if now - self._last_sphere_marker_t < self._sphere_marker_period_s:
+            return
+        pos = getattr(self.controller, 'last_sphere_pos', None)
+        radii = getattr(self.controller, 'last_sphere_radii', None)
+        h = getattr(self.controller, 'last_sphere_h', None)
+        if pos is None or radii is None or h is None or len(pos) == 0:
+            return
+        self._last_sphere_marker_t = now
+
+        colors = self._hot_colors_for_clearance(h)
+        frame_id = self.controller.urdf_model.get_root()
+        stamp = self.get_clock().now().to_msg()
+
+        arr = MarkerArray()
+        for i in range(len(pos)):
+            m = Marker()
+            m.header.frame_id = frame_id
+            m.header.stamp = stamp
+            m.ns = 'cbf_spheres'
+            m.id = i
+            m.type = Marker.SPHERE
+            m.action = Marker.ADD
+            m.pose.position.x = float(pos[i, 0])
+            m.pose.position.y = float(pos[i, 1])
+            m.pose.position.z = float(pos[i, 2])
+            m.pose.orientation.w = 1.0
+            d = 2.0 * float(radii[i])
+            m.scale.x = m.scale.y = m.scale.z = d
+            m.color.r = float(colors[i, 0])
+            m.color.g = float(colors[i, 1])
+            m.color.b = float(colors[i, 2])
+            m.color.a = 0.7
+            arr.markers.append(m)
+        self.sphere_marker_pub.publish(arr)
+
+    def _hot_colors_for_clearance(self, h):
+        """Map per-sphere clearance to RGB via matplotlib's 'hot' colormap.
+
+        h = d_env - r (sphere-surface to nearest obstacle, in metres).
+        Linear scale chosen so h=d_red → hot(0.365) = pure red, h=d_black →
+        hot(0) = black. Below d_red the scale extrapolates into the
+        green→white range (yellow / hot = even more alarming); above d_black
+        clipped to black.
+        """
+        h = np.asarray(h, dtype=float)
+        d_red = self.sphere_marker_d_red
+        d_black = self.sphere_marker_d_black
+        # Avoid divide-by-zero if a user mis-configures the params equal.
+        span = max(d_black - d_red, 1e-9)
+        s = (d_black - h) / span * 0.365
+        s = np.clip(s, 0.0, 1.0)
+        # Hot colormap segments:
+        #   red:   ramps 0 → 1 over s ∈ [0,    0.365]
+        #   green: ramps 0 → 1 over s ∈ [0.365, 0.745]
+        #   blue:  ramps 0 → 1 over s ∈ [0.745, 1.000]
+        r = np.clip(s / 0.365, 0.0, 1.0)
+        g = np.clip((s - 0.365) / (0.745 - 0.365), 0.0, 1.0)
+        b = np.clip((s - 0.745) / (1.0 - 0.745), 0.0, 1.0)
+        return np.stack([r, g, b], axis=-1)
 
     def _log_diag(self):
         now = time.monotonic()

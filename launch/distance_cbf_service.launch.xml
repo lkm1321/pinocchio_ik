@@ -25,6 +25,15 @@
          description="How long to block waiting for /sdf_query to appear on DDS." />
     <arg name="alpha_gain" default="2.0"
          description="Class-K gain for the CBF: alpha(h) = alpha_gain * h. Larger ⇒ less conservative (brakes only near contact); smaller ⇒ wider standoff." />
+    <arg name="publish_sphere_markers" default="true"
+         description="Publish per-link CBF spheres as a visualization_msgs/MarkerArray on 'cbf_spheres', coloured by clearance via the hot colormap." />
+    <arg name="sphere_marker_topic" default="cbf_spheres" />
+    <arg name="sphere_marker_d_red" default="0.1"
+         description="Sphere clearance (m) that maps to pure red on the hot colormap." />
+    <arg name="sphere_marker_d_black" default="2.0"
+         description="Sphere clearance (m) at or above which markers fade to black (safe)." />
+    <arg name="sphere_marker_rate_hz" default="20.0"
+         description="Max publish rate for the marker topic; set 0 to disable." />
 
     <node pkg="pinocchio_ik" exec="distance_cbf_service" output="screen">
         <param name="urdf_path" value="$(var urdf_path)"/>
@@ -34,6 +43,11 @@
         <param name="sdf_timeout_sec" value="$(var sdf_timeout_sec)"/>
         <param name="sdf_wait_for_service_sec" value="$(var sdf_wait_for_service_sec)"/>
         <param name="alpha_gain" value="$(var alpha_gain)"/>
+        <param name="publish_sphere_markers" value="$(var publish_sphere_markers)"/>
+        <param name="sphere_marker_topic" value="$(var sphere_marker_topic)"/>
+        <param name="sphere_marker_d_red" value="$(var sphere_marker_d_red)"/>
+        <param name="sphere_marker_d_black" value="$(var sphere_marker_d_black)"/>
+        <param name="sphere_marker_rate_hz" value="$(var sphere_marker_rate_hz)"/>
 
         <remap from="sdf_query" to="$(var sdf_query_topic)"/>
         <remap from="joint_states" to="$(var joint_states_topic)"/>

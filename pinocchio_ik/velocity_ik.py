@@ -45,7 +45,17 @@ class VelocityIKNode(Node):
         ) or [f"joint{i}" for i in range(1, 7)]
         wd_param = self.get_parameter('watchdog_timeout_sec').get_parameter_value().double_value
         self.watchdog_timeout_sec = wd_param if wd_param > 0.0 else 3.0 / self.rate
-        self.reference_frame = pin.ReferenceFrame.WORLD if is_world else pin.ReferenceFrame.LOCAL
+        # is_world=true maps to LOCAL_WORLD_ALIGNED, NOT WORLD: the operator
+        # wants the angular velocity expressed in the world frame *with the
+        # EE as the centre of rotation*, not the spatial (screw) twist where
+        # v is the velocity of a body-fixed point at the world origin. The
+        # spatial-twist reading turns a pure ω command into a large EE
+        # translation: v_EE = ω × p_EE (the lever-arm effect). LWA gives
+        # [v_EE; ω] in world frame, which is the usual intuitive meaning.
+        self.reference_frame = (
+            pin.ReferenceFrame.LOCAL_WORLD_ALIGNED if is_world
+            else pin.ReferenceFrame.LOCAL
+        )
         self.force_orientation = False
 
         # === Load URDF ===
