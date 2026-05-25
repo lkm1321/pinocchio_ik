@@ -14,6 +14,10 @@
   <exec_depend>std_msgs</exec_depend>
   <!-- distance_cbf_service uses SdfQuery from this msgs-only package. -->
   <exec_depend>erl_gp_sdf_msgs</exec_depend>
+  <!-- distance_cbf_capnp queries the erl_gp_sdf_ros mapping node via its
+       Cap'n Proto RPC server (capnp_rpc.enabled: true in the mapping node's
+       YAML config). The python client uses pycapnp (pip install pycapnp);
+       no rosdep key exists. The capnp schema is bundled under share/capnp/. -->
   <!-- vr_twist_publisher additionally needs the pyopenvr PyPI package
        (pip install openvr) and a SteamVR runtime; no rosdep key exists. -->
   <test_depend>ament_copyright</test_depend>

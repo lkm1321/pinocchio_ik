@@ -8,6 +8,9 @@ The service name and the URDF/joint config are declared on a dedicated
 ``sdf_client_node`` (separate from the CBF node so the SDF client lives in
 its own mutually-exclusive callback group). The launch file sets parameters
 on this node.
+
+See ``distance_cbf_capnp`` for the Cap'n Proto RPC variant — same CBF logic,
+different transport (no DDS, no msg-package dep).
 """
 
 import rclpy
