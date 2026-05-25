@@ -11,11 +11,11 @@ from scipy.spatial.transform import Rotation as Rot
 import pinocchio_ik.triad_openvr as vr
 
 # --- OpenVR frame -> robot frame (forward-left-up) -------------------------
-# (x, y, z)_robot = (z, -x, -y)_vr   [taken straight from the original stub]
+# (x, y, z)_robot = (z, x, y)_vr
 VR_TO_ROBOT = np.array([
     [ 0.0,  0.0,  1.0],
-    [-1.0,  0.0,  0.0],
-    [ 0.0, -1.0,  0.0],
+    [ 1.0,  0.0,  0.0],
+    [ 0.0,  1.0,  0.0],
 ])
 VR_TO_ROBOT_ROT = Rot.from_matrix(VR_TO_ROBOT)
 

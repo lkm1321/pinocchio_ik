@@ -36,13 +36,13 @@ class TwistPublisherNode(Node):
             return
 
         # jumble coordinate from openvr to forward - left - up
-        msg.linear.x =  linear_vel[2]
-        msg.linear.y = -linear_vel[0]
-        msg.linear.z = -linear_vel[1]
+        msg.linear.x = linear_vel[2]
+        msg.linear.y = linear_vel[0]
+        msg.linear.z = linear_vel[1]
 
-        msg.angular.x =  angular_vel[2]
-        msg.angular.y = -angular_vel[0]
-        msg.angular.z = -angular_vel[1]
+        msg.angular.x = angular_vel[2]
+        msg.angular.y = angular_vel[0]
+        msg.angular.z = angular_vel[1]
 
         self.publisher.publish(msg)
 
