@@ -12,6 +12,7 @@ import pinocchio as pin
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from pinocchio.visualize import MeshcatVisualizer as Visualizer
 import tempfile
+import time
 
 
 class VelocityIKNode(Node):
@@ -28,6 +29,11 @@ class VelocityIKNode(Node):
             'controlled_joint_names',
             [f"joint{i}" for i in range(1, 7)],
         )
+        # Watchdog: if the control_loop hasn't successfully published in this
+        # many seconds, an independent timer publishes a zero joint-velocity
+        # command. Default is 3 nominal periods (=3/rate) so an occasional
+        # late tick doesn't trip the watchdog but a real stall does.
+        self.declare_parameter('watchdog_timeout_sec', 0.0)
 
         self.end_effector_link = self.get_parameter('end_effector_link').get_parameter_value().string_value
         self.base_link = self.get_parameter('base_link').get_parameter_value().string_value
@@ -37,6 +43,8 @@ class VelocityIKNode(Node):
             self.get_parameter('controlled_joint_names')
             .get_parameter_value().string_array_value
         ) or [f"joint{i}" for i in range(1, 7)]
+        wd_param = self.get_parameter('watchdog_timeout_sec').get_parameter_value().double_value
+        self.watchdog_timeout_sec = wd_param if wd_param > 0.0 else 3.0 / self.rate
         self.reference_frame = pin.ReferenceFrame.WORLD if is_world else pin.ReferenceFrame.LOCAL
         self.force_orientation = False
 
@@ -78,6 +86,15 @@ class VelocityIKNode(Node):
         self.v_des = np.zeros(6)  # Desired end-effector twist
         self.timer = self.create_timer(1.0 / self.rate, self.control_loop)
         self.last_command_time = self.get_clock().now()
+        # Watchdog: timestamp (monotonic seconds) of the last successful
+        # joint-velocity publish from control_loop. Initialised to NOW so
+        # the watchdog doesn't fire while the node is still booting up.
+        self._last_publish_t = time.monotonic()
+        self._watchdog_warned = False
+        # Watch at 5x the nominal rate so we catch stalls quickly.
+        self._watchdog_timer = self.create_timer(
+            min(0.2 / self.rate, 0.05), self._watchdog_tick,
+        )
 
     # ------------------------------------------------------
     # URDF setup
@@ -251,6 +268,41 @@ class VelocityIKNode(Node):
         position_msg = Float64MultiArray()
         position_msg.data = self.q_pin[controlled_joint_idxs].tolist()
         self.joint_position_pub.publish(position_msg)
+
+        # Successful publish — refresh the watchdog deadline.
+        self._last_publish_t = time.monotonic()
+        if self._watchdog_warned:
+            self.get_logger().info("velocity_ik: control loop recovered.")
+            self._watchdog_warned = False
+
+    # ------------------------------------------------------
+    # Watchdog
+    # ------------------------------------------------------
+    def _watchdog_tick(self):
+        """Publish a zero joint-velocity command if control_loop hasn't
+        successfully published within `watchdog_timeout_sec`.
+
+        Reasons control_loop might be late: model/joint_state still missing,
+        IK exception, the executor being starved by a long-running callback
+        elsewhere. In any of those cases we'd rather command zero than have
+        the robot keep tracking the last (now stale) velocity.
+        """
+        now = time.monotonic()
+        if now - self._last_publish_t <= self.watchdog_timeout_sec:
+            return
+
+        n = len(self.controlled_joint_names)
+        zero_msg = Float64MultiArray()
+        zero_msg.data = [0.0] * n
+        self.joint_velocity_pub.publish(zero_msg)
+
+        if not self._watchdog_warned:
+            self.get_logger().warn(
+                f"velocity_ik: control loop missed "
+                f"{now - self._last_publish_t:.3f}s (timeout "
+                f"{self.watchdog_timeout_sec:.3f}s); publishing zero."
+            )
+            self._watchdog_warned = True
 
 
 def main(args=None):
