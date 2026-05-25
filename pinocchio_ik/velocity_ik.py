@@ -170,7 +170,7 @@ class VelocityIKNode(Node):
 
         # TODO: fix hardcode
         controlled_joints = [
-            f"xarm6_joint{i}" for i in range(1, 7)
+            f"joint{i}" for i in range(1, 7)
         ]
 
         controlled_joint_idxs = [self.model.getJointId(name) - 1 for name in controlled_joints]

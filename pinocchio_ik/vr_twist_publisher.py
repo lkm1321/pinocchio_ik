@@ -21,12 +21,21 @@ class TwistPublisherNode(Node):
         if linear_vel is None or angular_vel is None:
             return
 
-        msg.linear.x = linear_vel[0]
-        msg.linear.y = linear_vel[1]
-        msg.linear.z = linear_vel[2]
-        msg.angular.x = angular_vel[0]
-        msg.angular.y = angular_vel[1]
-        msg.angular.z = angular_vel[2]
+        # msg.linear.x = linear_vel[0]
+        # msg.linear.y = linear_vel[1]
+        # msg.linear.z = linear_vel[2]
+        # msg.angular.x = angular_vel[0]
+        # msg.angular.y = angular_vel[1]
+        # msg.angular.z = angular_vel[2]
+
+        # jumble coordinate from openvr to forward - left - up
+        msg.linear.x =  linear_vel[2]
+        msg.linear.y = -linear_vel[0]
+        msg.linear.z = -linear_vel[1]
+
+        msg.angular.x =  angular_vel[2]
+        msg.angular.y = -angular_vel[0]
+        msg.angular.z = -angular_vel[1]
 
         self.publisher.publish(msg)
 
