@@ -60,3 +60,28 @@ test-cbf = { cmd = "python test/test_cbf.py", description = "Run the Python-only
 test-pointcloud-sdf = { cmd = "python test/test_pointcloud_sdf.py", description = "Visualize PointCloudSDF on a 2D slice and run the FK CBF using it" }
 test-xarm6-cbf = { cmd = "python test/test_xarm6_cbf.py", description = "Run the FK CBF on the xArm6 with a spherical workspace obstacle" }
 test-webgl = { cmd = "python test/test_webgl.py", description = "Generate a standalone WebGL diagnostic page to open in your browser" }
+
+# -- VR-only environment -----------------------------------------------------
+# Standalone env for running vr_twist_publisher without pulling pinocchio,
+# cvxpy, osqp, meshcat, matplotlib, etc. ROS 2 Humble comes from RoboStack on
+# conda-forge; pyopenvr comes from PyPI. Use as:
+#     pixi run -e vr vr-twist
+[tool.pixi.feature.vr]
+channels = ["https://prefix.dev/robostack-staging", "conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.feature.vr.dependencies]
+python = "3.11.*"
+numpy = "*"
+ros-humble-rclpy = "*"
+ros-humble-geometry-msgs = "*"
+
+[tool.pixi.feature.vr.pypi-dependencies]
+openvr = "*"
+
+[tool.pixi.feature.vr.tasks]
+vr-twist = { cmd = "python -m pinocchio_ik.vr_twist_publisher", description = "Run the VR twist publisher node (requires SteamVR runtime + an OpenVR controller)" }
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+vr = { features = ["vr"], no-default-feature = true, solve-group = "vr" }
