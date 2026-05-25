@@ -15,7 +15,7 @@ from scipy.spatial.distance import cdist
 import ros2_numpy
 
 from pinocchio_ik.pointcloud_sdf import PointCloudSDF
-from pinocchio_ik.qpcbf import PinocchioFKCBF, table_sdf
+from pinocchio_ik.qpcbf import PinocchioFKCBF, table_sdf, wall_sdf, compose
 
 
 class PointCloudKDTreeNode(Node):
@@ -302,7 +302,13 @@ def main(args=None):
     table_sdf_z0 = 0.01
     table_sdf_to_use = lambda query_point: table_sdf(table_sdf_z0, query_point)
 
-    cbf_node = DistanceCBFNode(table_sdf_to_use)
+    wall_sdf_x0 = -0.2
+    wall_sdf_to_use = lambda query_point: wall_sdf(wall_sdf_x0, query_point)
+
+    composed_sdf_to_use = compose(table_sdf_to_use, wall_sdf_to_use)
+
+
+    cbf_node = DistanceCBFNode(composed_sdf_to_use)
     executor.add_node(cbf_node)
 
     executor.spin()

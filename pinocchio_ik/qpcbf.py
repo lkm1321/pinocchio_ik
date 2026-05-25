@@ -83,6 +83,36 @@ def table_sdf(z0, query_point):
 
     return dist, gradient
 
+def wall_sdf(x0, query_point):
+    dist = query_point[..., 0] - x0
+    gradient = np.zeros_like(query_point)
+    gradient[..., 0] = 1.
+
+    return dist, gradient
+
+
+def compose(*sdfs):
+    def compose_sdf(query_point):
+        dists = []
+        grads = []
+        for sdf in sdfs:
+            dist, grad = sdf(query_point)
+            dists.append(dist)
+            grads.append(grad)
+
+        print("original shape:", dist.shape, grad.shape)
+
+        dists = np.stack(dists, axis=-1)
+        grads = np.stack(grads, axis=-1)
+
+        min_indices = np.argmin(dists, axis=-1)
+        min_dists = np.take_along_axis(dists, min_indices[..., np.newaxis], axis=-1)[..., 0]
+        min_grads = np.take_along_axis(grads, min_indices[..., np.newaxis, np.newaxis], axis=-1)[..., 0]
+
+        print("new shape:", min_dists.shape, min_grads.shape)
+
+        return min_dists, min_grads
+    return compose_sdf
 
 class PinocchioFKCBF:
 
