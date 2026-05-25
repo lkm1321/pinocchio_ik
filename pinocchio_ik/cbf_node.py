@@ -11,9 +11,6 @@ from std_msgs.msg import String, Float64MultiArray
 from sensor_msgs.msg import JointState, PointCloud2
 from scipy.spatial.distance import cdist
 
-# You may need to install this: pip install ros2-numpy
-import ros2_numpy
-
 from pinocchio_ik.pointcloud_sdf import PointCloudSDF
 from pinocchio_ik.qpcbf import PinocchioFKCBF, table_sdf, wall_sdf, compose
 
@@ -95,6 +92,10 @@ class PointCloudKDTreeNode(Node):
             self.collision_data = self.collision_model.createData()
 
     def pointcloud_callback(self, msg: PointCloud2):
+        # ros2_numpy is only needed for the legacy point-cloud-driven CBF
+        # path. Defer the import so the service-call CBF path can run in
+        # images that don't ship it.
+        import ros2_numpy
         t0 = time.time()
 
         cloud_arr = ros2_numpy.numpify(msg)
@@ -171,23 +172,41 @@ class PointCloudKDTreeNode(Node):
         return self.sdf(query_point)
 
 
+_DEFAULT_URDF_PATH = '/keti_ws/src/pinocchio_ik/launch/xarm6_with_gripper_spherized.urdf'
+_DEFAULT_JOINT_NAMES = [f"joint{i}" for i in range(1, 7)]
+_DEFAULT_EE_FRAME = 'xarm6_ee_tip'
+
+
 class DistanceCBFNode(Node):
-    def __init__(self, *controller_args):
+    def __init__(
+        self,
+        *controller_args,
+        urdf_path=_DEFAULT_URDF_PATH,
+        controlled_joint_names=None,
+        ee_frame_name=_DEFAULT_EE_FRAME,
+    ):
         super().__init__('distance_cbf_node')
         self.get_logger().info('DistanceCBFNode has been started.')
         self.declare_parameter('robot_description', '')
 
+        self.urdf_path = urdf_path
+        self.controlled_joint_names = (
+            list(controlled_joint_names)
+            if controlled_joint_names is not None
+            else list(_DEFAULT_JOINT_NAMES)
+        )
+        self.ee_frame_name = ee_frame_name
+
         self.controller_args = controller_args
 
-        hardcoded_urdf_path = '/keti_ws/src/pinocchio_ik/launch/xarm6_with_gripper_spherized.urdf'
-        if os.path.exists(hardcoded_urdf_path):
-            self.get_logger().info("Using hardcoded path")
+        if self.urdf_path and os.path.exists(self.urdf_path):
+            self.get_logger().info(f"Loading URDF from {self.urdf_path}")
 
             self.controller = PinocchioFKCBF.from_urdf_file(
-                hardcoded_urdf_path,
+                self.urdf_path,
                 *self.controller_args,
-                controlled_joint_names=[f"joint{i}" for i in range(1, 7)],
-                ee_frame_name="xarm6_ee_tip",
+                controlled_joint_names=self.controlled_joint_names,
+                ee_frame_name=self.ee_frame_name,
             )
         else:
             urdf_str = self.get_parameter('robot_description').get_parameter_value().string_value
@@ -240,13 +259,24 @@ class DistanceCBFNode(Node):
             self.controller = PinocchioFKCBF.from_urdf_file(
                 urdf_file.name,
                 *self.controller_args,
-                controlled_joint_names=[f"joint{i}" for i in range(1, 7)],
-                ee_frame_name="xarm6_ee_tip",
+                controlled_joint_names=self.controlled_joint_names,
+                ee_frame_name=self.ee_frame_name,
             )
 
     def joint_state_callback(self, msg: JointState):
         if self.controller is None:
             return
+
+        # Internal rate limit: joint_state arrives at >700Hz on this stack,
+        # which under MutuallyExclusiveCallbackGroup keeps the executor
+        # thread permanently busy running the slow filter_and_publish QP
+        # and starves nominal_joint_velocity_callback. Cap our processing
+        # rate at ~100Hz — plenty for the CBF, leaves the executor free to
+        # dispatch other callbacks.
+        now = time.time()
+        if now - getattr(self, '_last_js_t', 0.0) < 0.01:
+            return
+        self._last_js_t = now
 
         for joint_name, position in zip(msg.name, msg.position):
             if joint_name not in self.controller.model.names:
@@ -260,6 +290,16 @@ class DistanceCBFNode(Node):
         self.filter_and_publish(self.nominal_velocity)
 
     def nominal_joint_velocity_callback(self, msg: Float64MultiArray):
+        now = time.time()
+        last = getattr(self, '_last_nom_cb_t', 0.0)
+        if now - last > 2.0:
+            self._last_nom_cb_t = now
+            self.get_logger().info(
+                f"cbf: nominal_cb fired, "
+                f"controller={self.controller is not None}, "
+                f"current_q={self.current_joint_state is not None}, "
+                f"||msg||={np.linalg.norm(np.array(msg.data)):.3f}"
+            )
         if self.controller is None or self.current_joint_state is None:
             return
 
@@ -290,6 +330,22 @@ class DistanceCBFNode(Node):
                 f"{type(e).__name__}: {e}"
             )
             filtered_msg.data = zero
+
+        # Throttled diagnostic — always print (regardless of nominal magnitude)
+        # so we can confirm filter_and_publish is actually being invoked.
+        nom_norm = float(np.linalg.norm(np.asarray(nominal_velocity)))
+        filt_norm = float(np.linalg.norm(np.asarray(filtered_msg.data)))
+        now = time.time()
+        last = getattr(self, '_last_diag_t', 0.0)
+        if now - last > 1.0:
+            self._last_diag_t = now
+            q_str = (
+                np.round(self.current_joint_state, 3).tolist()
+                if self.current_joint_state is not None else 'None'
+            )
+            self.get_logger().info(
+                f"cbf: ||nom||={nom_norm:.3f} ||filt||={filt_norm:.3f} q={q_str}"
+            )
 
         self.filtered_joint_velocity_pub.publish(filtered_msg)
 

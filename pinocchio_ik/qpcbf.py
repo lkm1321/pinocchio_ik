@@ -6,31 +6,35 @@ from urdf_parser_py import urdf
 
 class QPCBF:
     def __init__(self, nu, update_method, nx=None, alpha_function=lambda x: x):
-        self.nominal_control = cp.Parameter(nu)
         self.control = cp.Variable(nu)
         if nx is None:
             nx = nu
 
         self.update_matrices = update_method
-
-        A_matrix_test, b_vector_test, _ = self.update_matrices(np.ones(nx))
-
-        self.A_matrix = cp.Parameter(A_matrix_test.shape)
-        self.b_vector = cp.Parameter(b_vector_test.shape)
-        self.M_matrix = cp.Parameter((nu, nu), PSD=True)
-
-        self.objective = cp.Minimize(cp.quad_form(self.control - self.nominal_control, self.M_matrix))
-        self.constraints = [self.A_matrix @ self.control + self.b_vector >= 0]
-        self.problem = cp.Problem(self.objective, self.constraints)
         self.alpha_function = alpha_function
+
+        # get_control rebuilds the cvxpy Problem from scratch each call, so
+        # we do NOT need to size cp.Parameters here — and doing so eagerly
+        # would force an SDF query at construction time, which is fragile
+        # when env_sdf is a ROS service that may not be ready yet.
 
     def get_control(self, current_state, nominal_control_np):
 
         A_matrix, b_vector, M_matrix = self.update_matrices(current_state)
 
+        # Per-joint velocity bound — without it the QP can emit wildly
+        # unsafe values (40+ rad/s) when M_matrix is near-singular and the
+        # constraint is nearly redundant. 1 rad/s is well above what any
+        # demo phase asks for and well within the xArm6 joint limits.
+        u_max = 1.0
+
         objective = cp.Minimize(cp.quad_form(self.control - nominal_control_np, M_matrix))
         b_vector = self.alpha_function(b_vector)
-        constraints = [A_matrix @ self.control + b_vector >= 0]
+        constraints = [
+            A_matrix @ self.control + b_vector >= 0,
+            self.control <= u_max,
+            self.control >= -u_max,
+        ]
         problem = cp.Problem(objective, constraints)
 
         problem.solve(solver='osqp')
@@ -140,7 +144,7 @@ class PinocchioFKCBF:
             nu=len(self.controlled_joint_idxs),
             update_method=self.build_matrix,
             nx=len(self.controlled_joint_idxs),
-            alpha_function=lambda x: 5.0 * x,
+            alpha_function=lambda x: 2.0 * x,
         )
 
         self.get_control = self.controller.get_control

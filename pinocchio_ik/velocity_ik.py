@@ -24,11 +24,19 @@ class VelocityIKNode(Node):
         self.declare_parameter('rate', 100.0)
         self.declare_parameter('robot_description', '')
         self.declare_parameter('is_world', True)
+        self.declare_parameter(
+            'controlled_joint_names',
+            [f"joint{i}" for i in range(1, 7)],
+        )
 
         self.end_effector_link = self.get_parameter('end_effector_link').get_parameter_value().string_value
         self.base_link = self.get_parameter('base_link').get_parameter_value().string_value
         self.rate = self.get_parameter('rate').get_parameter_value().double_value
         is_world = self.get_parameter('is_world').get_parameter_value().bool_value
+        self.controlled_joint_names = list(
+            self.get_parameter('controlled_joint_names')
+            .get_parameter_value().string_array_value
+        ) or [f"joint{i}" for i in range(1, 7)]
         self.reference_frame = pin.ReferenceFrame.WORLD if is_world else pin.ReferenceFrame.LOCAL
         self.force_orientation = False
 
@@ -168,12 +176,19 @@ class VelocityIKNode(Node):
             # No recent command, stop
             self.v_des = np.zeros(6)
 
-        # TODO: fix hardcode
-        controlled_joints = [
-            f"joint{i}" for i in range(1, 7)
+        controlled_joints = self.controlled_joint_names
+        # Skip names that aren't in this URDF (pinocchio returns njoints for
+        # unknown names, which would index out-of-bounds below).
+        controlled_joint_idxs = [
+            self.model.getJointId(name) - 1
+            for name in controlled_joints
+            if self.model.existJointName(name)
         ]
-
-        controlled_joint_idxs = [self.model.getJointId(name) - 1 for name in controlled_joints]
+        if len(controlled_joint_idxs) != len(controlled_joints):
+            missing = [n for n in controlled_joints if not self.model.existJointName(n)]
+            self.get_logger().warn(
+                f"controlled_joint_names contained joints not in the URDF: {missing}"
+            )
 
         # Forward kinematics and Jacobian
         data_source = self.q

@@ -9,12 +9,24 @@ The service definition lives in another workspace package (default
 module imports cleanly even when that package isn't on the path.
 """
 
+import time
 from importlib import import_module
 from threading import Event
 
 import numpy as np
+import rclpy
 from geometry_msgs.msg import Vector3
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+
+
+def _executor_spinning(node):
+    """True if `node` is owned by an executor (i.e. likely being spun)."""
+    try:
+        return node.executor is not None
+    except AttributeError:
+        # Old rclpy without the public attribute — fall back to the private
+        # weakref check; if we can't tell, assume yes so we don't spin twice.
+        return getattr(node, '_executor_weak', None) is not None
 
 
 class RosSdfClient:
@@ -68,26 +80,54 @@ class RosSdfClient:
                 setattr(req, flag, True)
 
         future = self._client.call_async(req)
+        # If we're already inside a spinning executor (the steady-state),
+        # Event.wait() lets the executor thread dispatch the response. If we
+        # are NOT spinning yet — e.g. during DistanceCBFNode construction,
+        # which happens before executor.spin() — Event.wait() would deadlock
+        # because nothing is processing the client's response. Fall back to
+        # manual spin_once on this node so the call can complete either way.
         done = Event()
         future.add_done_callback(lambda _f: done.set())
-        if not done.wait(self._timeout_sec):
-            future.cancel()
-            raise TimeoutError(
-                f"SDF service '{self._client.srv_name}' did not respond within "
-                f"{self._timeout_sec:.2f}s"
-            )
+
+        deadline = time.monotonic() + self._timeout_sec
+        spin_node = self._node if not _executor_spinning(self._node) else None
+        while not done.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                future.cancel()
+                raise TimeoutError(
+                    f"SDF service '{self._client.srv_name}' did not respond within "
+                    f"{self._timeout_sec:.2f}s"
+                )
+            if spin_node is not None:
+                # Manual pump while no executor is running yet.
+                rclpy.spin_once(spin_node, timeout_sec=min(0.1, remaining))
+            else:
+                done.wait(min(0.1, remaining))
 
         resp = future.result()
         if resp is None:
             raise RuntimeError(
                 f"SDF service '{self._client.srv_name}' returned no result"
             )
-        if hasattr(resp, 'success') and not resp.success:
-            raise RuntimeError(
-                f"SDF service '{self._client.srv_name}' returned success=False"
-            )
-
         n = len(req.query_points)
+        if hasattr(resp, 'success') and not resp.success:
+            # The mapping node returns success=False when its map is empty
+            # (no scans integrated yet). For the CBF this is "no obstacles
+            # known" — far positive distance, zero gradient, no constraint.
+            # We log once so the operator notices but don't crash.
+            if not getattr(self, '_warned_empty', False):
+                self._node.get_logger().warn(
+                    f"SDF service '{self._client.srv_name}' returned "
+                    f"success=False (no map yet); treating as 'no obstacles'."
+                )
+                self._warned_empty = True
+            distances = np.full(n, 1e3, dtype=np.float64)
+            gradients = np.zeros((n, 3), dtype=np.float64)
+            if single:
+                return distances[0], gradients[0]
+            return distances, gradients
+
         distances = np.asarray(resp.signed_distances, dtype=np.float64)
         if distances.shape != (n,):
             raise RuntimeError(

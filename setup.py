@@ -26,6 +26,9 @@ setup(
             'distance_cbf = pinocchio_ik.cbf_node:main',
             'distance_cbf_service = pinocchio_ik.distance_cbf_service:main',
             'vr_twist_publisher = pinocchio_ik.vr_twist_publisher:main',
+            'canned_twist = pinocchio_ik.canned_twist:main',
+            'fov_demo = pinocchio_ik.fov_demo:main',
+            'image_recorder = pinocchio_ik.image_recorder:main',
         ],
     },
 )
