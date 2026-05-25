@@ -11,11 +11,11 @@ from scipy.spatial.transform import Rotation as Rot
 import pinocchio_ik.triad_openvr as vr
 
 # --- OpenVR frame -> robot frame (forward-left-up) -------------------------
-# (x, y, z)_robot = (z, x, y)_vr
+# (x, y, z)_robot = (z, -x, -y)_vr   [taken straight from the original stub]
 VR_TO_ROBOT = np.array([
     [ 0.0,  0.0,  1.0],
-    [ 1.0,  0.0,  0.0],
-    [ 0.0,  1.0,  0.0],
+    [-1.0,  0.0,  0.0],
+    [ 0.0, -1.0,  0.0],
 ])
 VR_TO_ROBOT_ROT = Rot.from_matrix(VR_TO_ROBOT)
 
@@ -31,19 +31,29 @@ class TwistPublisherNode(Node):
     snapping.
 
     The EE pose is taken from tf: the transform of `ee_frame` expressed in
-    `base_frame`. The published Twist is expressed in the EE frame.
+    `base_frame`. The published Twist's frame is selected by the `is_world`
+    parameter and must match the consumer (`velocity_ik`'s `is_world`):
+
+      * `is_world:=true`  (default) — publish in `base_frame`.
+      * `is_world:=false` — rotate by `R_ee^-1` and publish in the EE frame.
+
+    Mixing frames flips the PD sign on whichever axes the EE rotates
+    relative to the base, producing instability (a known footgun on the
+    xArm6 stick EE where left/right and up/down end up inverted).
     """
 
     def __init__(self):
         super().__init__('twist_publisher')
 
         # Frame parameters. ee_frame is the EE link. base_frame is the fixed
-        # frame the tf lookup and the PD math run in; the resulting twist is
-        # rotated into the EE frame before it is published.
+        # frame the tf lookup and the PD math run in. is_world selects the
+        # frame of the published Twist and MUST match velocity_ik's is_world.
         self.declare_parameter('ee_frame', 'link6')
         self.declare_parameter('base_frame', 'base_link')
+        self.declare_parameter('is_world', True)
         self.ee_frame = self.get_parameter('ee_frame').value
         self.base_frame = self.get_parameter('base_frame').value
+        self.is_world = bool(self.get_parameter('is_world').value)
 
         # Trigger deadman: hold the trigger to drive the robot. The trigger
         # axis is analog (0.0 released → 1.0 fully pressed); cross this
@@ -52,6 +62,17 @@ class TwistPublisherNode(Node):
         # re-indexing).
         self.declare_parameter('trigger_threshold', 0.5)
         self.trigger_threshold = float(self.get_parameter('trigger_threshold').value)
+
+        # Trackpad axis-mask: while the trigger is held, *clicking* the
+        # trackpad selects which axes the robot tracks.
+        #   left half  (trackpad_x < -deadzone) → position-only
+        #   right half (trackpad_x > +deadzone) → orientation-only
+        # No click, or click in the center band, → both (default).
+        # The suppressed axis is re-anchored to the current EE pose each
+        # tick, so its tracking error stays at zero — no spring stretch
+        # builds up while suppressed and switching back to 'both' is smooth.
+        self.declare_parameter('trackpad_deadzone', 0.3)
+        self.trackpad_deadzone = float(self.get_parameter('trackpad_deadzone').value)
 
         # PD gains. Output is a velocity, so kp maps metres -> m/s, etc.
         # Higher kp = stiffer/faster catch-up; kd damps the catch-up.
@@ -110,7 +131,8 @@ class TwistPublisherNode(Node):
         self.controller = self.v.devices["controller_1"]
         self.get_logger().info(
             f'VR virtual-coupling node started '
-            f'(EE tf: {self.base_frame} -> {self.ee_frame}).')
+            f'(EE tf: {self.base_frame} -> {self.ee_frame}, '
+            f'twist frame: {"world" if self.is_world else "ee"}).')
 
     # -- robot feedback: EE pose from tf ------------------------------------
     def get_ee_pose(self):
@@ -146,6 +168,22 @@ class TwistPublisherNode(Node):
     def _clamp(vec, max_norm):
         n = np.linalg.norm(vec)
         return vec * (max_norm / n) if n > max_norm else vec
+
+    def _axis_mask(self, inputs):
+        """Return (suppress_orient, suppress_lin) from the trackpad click.
+
+        Trackpad clicked on the left half  → position-only (orientation
+        suppressed). Clicked on the right half → orientation-only (linear
+        suppressed). No click / center click → neither suppressed.
+        """
+        if not inputs or not inputs.get('trackpad_pressed', False):
+            return False, False
+        x = float(inputs.get('trackpad_x', 0.0))
+        if x < -self.trackpad_deadzone:
+            return True, False           # position-only
+        if x >  self.trackpad_deadzone:
+            return False, True           # orientation-only
+        return False, False
 
     @staticmethod
     def _coerce_vec3(x):
@@ -230,6 +268,15 @@ class TwistPublisherNode(Node):
         if self.offset_pos is None:            # first tick after a fresh press
             self._capture_offset(vr_pos, vr_rot)
 
+        # Trackpad axis-mask: re-anchor the suppressed axis to the current
+        # EE pose so its ref==current → zero tracking error → zero PD output
+        # on that axis. Feedforward is zeroed below to match.
+        suppress_orient, suppress_lin = self._axis_mask(inputs)
+        if suppress_orient:
+            self.offset_rot = vr_rot.inv() * self.ee_rot
+        if suppress_lin:
+            self.offset_pos = self.ee_pos - vr_pos
+
         # Reference pose = VR pose mapped through the engage-time offset.
         ref_pos = vr_pos + self.offset_pos
         ref_rot = vr_rot * self.offset_rot
@@ -254,15 +301,24 @@ class TwistPublisherNode(Node):
         lin_ff = VR_TO_ROBOT @ lin_vel
         ang_ff = VR_TO_ROBOT @ ang_vel
 
+        # Zero the feedforward on suppressed axes so re-anchored zero PD
+        # actually yields zero command (FF doesn't bypass the mask).
+        if suppress_lin:
+            lin_ff = np.zeros(3)
+        if suppress_orient:
+            ang_ff = np.zeros(3)
+
         # PD + feedforward. Everything above is computed in the base frame.
         cmd_lin = lin_ff + self.kp_lin * pos_err + self.kd_lin * self.pos_err_dot
         cmd_ang = ang_ff + self.kp_ang * ang_err + self.kd_ang * self.ang_err_dot
 
-        # Express the twist in the EE frame: rotate both 3-vectors by
-        # R_ee^-1 (base -> EE). The reference point is unchanged (the EE
-        # origin itself), so no linear/angular coupling term is needed.
-        cmd_lin = self.ee_rot.inv().apply(cmd_lin)
-        cmd_ang = self.ee_rot.inv().apply(cmd_ang)
+        # Express the twist in the consumer's frame. is_world=true → keep
+        # base-frame; is_world=false → rotate into the EE frame by R_ee^-1
+        # (the EE origin is the reference point, so there's no extra
+        # linear/angular coupling term).
+        if not self.is_world:
+            cmd_lin = self.ee_rot.inv().apply(cmd_lin)
+            cmd_ang = self.ee_rot.inv().apply(cmd_ang)
 
         msg = Twist()
         msg.linear.x, msg.linear.y, msg.linear.z = map(float, cmd_lin)
