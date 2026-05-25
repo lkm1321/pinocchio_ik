@@ -366,6 +366,8 @@ class DistanceCBFNode(Node):
             self._js_stale_pub += 1
         if nom_stale:
             self._nom_stale_pub += 1
+        self._last_nom_norm = 0.0
+        self._last_filt_norm = 0.0
 
         last_warn = getattr(self, '_last_stale_warn_t', 0.0)
         if now - last_warn > 1.0:
@@ -406,7 +408,8 @@ class DistanceCBFNode(Node):
 
         self.filtered_joint_velocity_pub.publish(filtered_msg)
 
-        # Accumulate per-cycle stats; emit a consolidated log line per window.
+        # Accumulate per-cycle stats; the timer emits a consolidated log
+        # line per window via _log_diag().
         self._fp_count += 1
         dt = t_fp1 - t_fp0
         self._fp_total += dt
@@ -421,11 +424,10 @@ class DistanceCBFNode(Node):
             self._sum_build_time += getattr(inner, 'last_build_time', 0.0)
             self._sum_solve_time += getattr(inner, 'last_solve_time', 0.0)
 
-        nom_norm = float(np.linalg.norm(np.asarray(nominal_velocity)))
-        filt_norm = float(np.linalg.norm(np.asarray(filtered_msg.data)))
-        self._log_diag(nom_norm, filt_norm)
+        self._last_nom_norm = float(np.linalg.norm(np.asarray(nominal_velocity)))
+        self._last_filt_norm = float(np.linalg.norm(np.asarray(filtered_msg.data)))
 
-    def _log_diag(self, nom_norm, filt_norm):
+    def _log_diag(self):
         now = time.monotonic()
         window = now - self._last_diag_t
         if window < self._diag_window_s:
@@ -454,7 +456,8 @@ class DistanceCBFNode(Node):
             f"mat={self._sum_mat_time / n * 1e3:.1f}ms, "
             f"cvxpy_build={self._sum_build_time / n * 1e3:.1f}ms, "
             f"solve={self._sum_solve_time / n * 1e3:.1f}ms) | "
-            f"||nom||={nom_norm:.3f} ||filt||={filt_norm:.3f} | "
+            f"||nom||={getattr(self, '_last_nom_norm', 0.0):.3f} "
+            f"||filt||={getattr(self, '_last_filt_norm', 0.0):.3f} | "
             f"age js={js_age_ms:.0f}ms nom={nom_age_ms:.0f}ms | "
             f"thread={threading.current_thread().name}"
         )

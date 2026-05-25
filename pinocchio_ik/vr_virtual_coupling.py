@@ -139,6 +139,22 @@ class TwistPublisherNode(Node):
         n = np.linalg.norm(vec)
         return vec * (max_norm / n) if n > max_norm else vec
 
+    @staticmethod
+    def _coerce_vec3(x):
+        """Convert triad_openvr's 3-vector return shapes to a (3,) float ndarray.
+
+        get_velocity() / get_angular_velocity() return an openvr.HmdVector3_t,
+        a ctypes struct that numpy surfaces as a structured scalar with a
+        single field 'v' of dtype ('<f4', (3,)). np.asarray(..., dtype=float)
+        can't cast a structured dtype, so unwrap the 'v' field first.
+        Also handles the ctypes-attribute form (.v) and plain sequences.
+        """
+        if isinstance(x, np.ndarray) and x.dtype.names and 'v' in x.dtype.names:
+            x = x['v']
+        elif hasattr(x, 'v'):
+            x = x.v
+        return np.asarray(x, dtype=float)
+
     def _capture_offset(self, vr_pos, vr_rot):
         """Anchor the relative map so the robot starts exactly where it is."""
         self.offset_pos = self.ee_pos - vr_pos
@@ -164,6 +180,31 @@ class TwistPublisherNode(Node):
         lin_vel = self.controller.get_velocity()
         ang_vel = self.controller.get_angular_velocity()
         if vr_pos is None or lin_vel is None or ang_vel is None:
+            return
+
+        # triad_openvr returns openvr.HmdVector3_t (a ctypes struct numpy
+        # lifts as a structured scalar with field 'v'), not a plain
+        # 3-tuple, so we have to unwrap before casting to float — otherwise
+        # the VR_TO_ROBOT @ ... matmul below dies with
+        # "ufunc 'matmul' did not contain signature matching types".
+        try:
+            lin_vel = self._coerce_vec3(lin_vel)
+            ang_vel = self._coerce_vec3(ang_vel)
+        except (TypeError, ValueError):
+            self.get_logger().warn(
+                f'vr_virtual_coupling: non-numeric VR velocity '
+                f'(lin={lin_vel!r}, ang={ang_vel!r}); skipping tick.',
+                throttle_duration_sec=2.0,
+            )
+            return
+        if (lin_vel.shape != (3,) or ang_vel.shape != (3,)
+                or not np.isfinite(lin_vel).all()
+                or not np.isfinite(ang_vel).all()):
+            self.get_logger().warn(
+                f'vr_virtual_coupling: malformed VR velocity '
+                f'(lin={lin_vel}, ang={ang_vel}); skipping tick.',
+                throttle_duration_sec=2.0,
+            )
             return
 
         # Clutch: hold grip to freeze the robot and reposition your hand;
@@ -198,8 +239,8 @@ class TwistPublisherNode(Node):
         # VR velocity as feedforward, so the robot can hold a *moving*
         # target with zero steady-state lag. Drop these terms if you want a
         # purely spring-like feel (robot lags proportionally to hand speed).
-        lin_ff = VR_TO_ROBOT @ np.array(lin_vel)
-        ang_ff = VR_TO_ROBOT @ np.array(ang_vel)
+        lin_ff = VR_TO_ROBOT @ lin_vel
+        ang_ff = VR_TO_ROBOT @ ang_vel
 
         # PD + feedforward. Everything above is computed in the base frame.
         cmd_lin = lin_ff + self.kp_lin * pos_err + self.kd_lin * self.pos_err_dot
