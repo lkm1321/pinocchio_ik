@@ -1,10 +1,12 @@
 import os
 import tempfile
+import threading
 import time
 
 import numpy as np
 import pinocchio as pin
 import rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy
 from std_msgs.msg import String, Float64MultiArray
@@ -224,27 +226,71 @@ class DistanceCBFNode(Node):
 
             self.controller = None
 
+        # Subscriptions are pure setters: they cache the latest joint state /
+        # nominal command and stamp a receive time. The QP is driven by a
+        # separate timer on its own callback group so the subscriptions
+        # never serialize behind a slow filter cycle. Keeping the two
+        # subscriptions in a single MX group is fine — neither callback
+        # does meaningful work.
+        self._input_cb_group = MutuallyExclusiveCallbackGroup()
+        self._timer_cb_group = MutuallyExclusiveCallbackGroup()
+
         self.current_joint_state_sub = self.create_subscription(
             JointState,
             'joint_states',
             self.joint_state_callback,
-            10
+            10,
+            callback_group=self._input_cb_group,
         )
         self.current_joint_state = None
+        self._last_js_recv_t = None  # time.monotonic() of last joint_state
 
         self.nominal_joint_velocity_sub = self.create_subscription(
             Float64MultiArray,
             'nominal_joint_velocity',
             self.nominal_joint_velocity_callback,
-            10
+            10,
+            callback_group=self._input_cb_group,
         )
-        self.nominal_velocity = [0.] * len(self.controller.controlled_joint_idxs)
+        self.nominal_velocity = np.zeros(len(self.controller.controlled_joint_idxs))
+        self._last_nom_recv_t = None  # time.monotonic() of last nominal cmd
 
         self.filtered_joint_velocity_pub = self.create_publisher(
             Float64MultiArray,
             'filtered_joint_velocity',
             10
         )
+
+        # Filter timer runs at 100Hz on its own callback group so the
+        # subscriptions can dispatch on the executor's other thread while
+        # the QP is in flight. Per-cycle staleness check (see _STALE_S)
+        # forces a zero command if either input has dropped below 10Hz.
+        self._filter_period_s = 0.01
+        self._STALE_S = 0.15  # 1.5x the 10Hz nominal-period budget
+        self._filter_timer = self.create_timer(
+            self._filter_period_s,
+            self._filter_timer_cb,
+            callback_group=self._timer_cb_group,
+        )
+
+        # Rolling instrumentation counters; reset by _log_diag every window.
+        self._diag_window_s = 2.0
+        self._last_diag_t = time.monotonic()
+        self._js_rx = 0           # raw joint_states received
+        self._nom_rx = 0          # nominal_joint_velocity received
+        self._timer_ticks = 0     # filter timer firings
+        self._fp_count = 0        # filter_and_publish invocations in window
+        self._stale_pub = 0       # zero-publish events due to stale inputs
+        self._js_stale_pub = 0    # of those, stale joint_state
+        self._nom_stale_pub = 0   # of those, stale nominal
+        self._fp_total = 0.0      # cumulative wall time
+        self._fp_max = 0.0
+        self._sum_sdf_time = 0.0
+        self._sum_sdf_calls = 0
+        self._sum_pin_time = 0.0
+        self._sum_mat_time = 0.0
+        self._sum_build_time = 0.0
+        self._sum_solve_time = 0.0
 
     def urdf_callback(self, msg: String):
         urdf_str = msg.data
@@ -264,52 +310,78 @@ class DistanceCBFNode(Node):
             )
 
     def joint_state_callback(self, msg: JointState):
+        """Pure setter: cache the latest joint configuration + recv time."""
         if self.controller is None:
             return
 
-        # Internal rate limit: joint_state arrives at >700Hz on this stack,
-        # which under MutuallyExclusiveCallbackGroup keeps the executor
-        # thread permanently busy running the slow filter_and_publish QP
-        # and starves nominal_joint_velocity_callback. Cap our processing
-        # rate at ~100Hz — plenty for the CBF, leaves the executor free to
-        # dispatch other callbacks.
-        now = time.time()
-        if now - getattr(self, '_last_js_t', 0.0) < 0.01:
-            return
-        self._last_js_t = now
+        self._js_rx += 1
+
+        if self.current_joint_state is None:
+            self.current_joint_state = np.zeros(len(self.controller.controlled_joint_idxs))
 
         for joint_name, position in zip(msg.name, msg.position):
             if joint_name not in self.controller.model.names:
                 continue
-
-            if self.current_joint_state is None:
-                self.current_joint_state = np.zeros(len(self.controller.controlled_joint_idxs))
-
             self.current_joint_state[self.controller.model.getJointId(joint_name) - 1] = position
 
-        self.filter_and_publish(self.nominal_velocity)
+        self._last_js_recv_t = time.monotonic()
 
     def nominal_joint_velocity_callback(self, msg: Float64MultiArray):
-        now = time.time()
-        last = getattr(self, '_last_nom_cb_t', 0.0)
-        if now - last > 2.0:
-            self._last_nom_cb_t = now
-            self.get_logger().info(
-                f"cbf: nominal_cb fired, "
-                f"controller={self.controller is not None}, "
-                f"current_q={self.current_joint_state is not None}, "
-                f"||msg||={np.linalg.norm(np.array(msg.data)):.3f}"
-            )
-        if self.controller is None or self.current_joint_state is None:
+        """Pure setter: cache the latest nominal velocity + recv time."""
+        self._nom_rx += 1
+        if self.controller is None:
+            return
+        self.nominal_velocity = np.array(msg.data)
+        self._last_nom_recv_t = time.monotonic()
+
+    def _filter_timer_cb(self):
+        """100Hz tick: check input freshness, then run the CBF QP and publish."""
+        if self.controller is None:
             return
 
-        nominal_velocity = np.array(msg.data)
-        self.nominal_velocity = nominal_velocity
-        self.filter_and_publish(self.nominal_velocity)
+        self._timer_ticks += 1
+        now = time.monotonic()
+
+        js_t = self._last_js_recv_t
+        nom_t = self._last_nom_recv_t
+        js_stale = js_t is None or (now - js_t) > self._STALE_S
+        nom_stale = nom_t is None or (now - nom_t) > self._STALE_S
+
+        if js_stale or nom_stale:
+            self._publish_zero_stale(now, js_stale, nom_stale, js_t, nom_t)
+        else:
+            self.filter_and_publish(self.nominal_velocity)
+
+        self._log_diag()
+
+    def _publish_zero_stale(self, now, js_stale, nom_stale, js_t, nom_t):
+        """Emit zero velocity and a throttled warning when inputs go stale."""
+        n_dof = len(self.controller.controlled_joint_idxs)
+        msg = Float64MultiArray()
+        msg.data = [0.0] * n_dof
+        self.filtered_joint_velocity_pub.publish(msg)
+
+        self._stale_pub += 1
+        if js_stale:
+            self._js_stale_pub += 1
+        if nom_stale:
+            self._nom_stale_pub += 1
+
+        last_warn = getattr(self, '_last_stale_warn_t', 0.0)
+        if now - last_warn > 1.0:
+            self._last_stale_warn_t = now
+            js_age = (now - js_t) if js_t is not None else float('inf')
+            nom_age = (now - nom_t) if nom_t is not None else float('inf')
+            self.get_logger().warn(
+                f"cbf: STOP — inputs stale (threshold {self._STALE_S*1e3:.0f}ms): "
+                f"joint_state age={js_age*1e3:.0f}ms, "
+                f"nominal_cmd age={nom_age*1e3:.0f}ms; publishing zero velocity."
+            )
 
     def filter_and_publish(self, nominal_velocity):
         filtered_msg = Float64MultiArray()
         zero = [0.] * len(self.controller.controlled_joint_idxs)
+        t_fp0 = time.perf_counter()
         try:
             control = self.controller.get_control(
                 self.current_joint_state,
@@ -330,24 +402,79 @@ class DistanceCBFNode(Node):
                 f"{type(e).__name__}: {e}"
             )
             filtered_msg.data = zero
-
-        # Throttled diagnostic — always print (regardless of nominal magnitude)
-        # so we can confirm filter_and_publish is actually being invoked.
-        nom_norm = float(np.linalg.norm(np.asarray(nominal_velocity)))
-        filt_norm = float(np.linalg.norm(np.asarray(filtered_msg.data)))
-        now = time.time()
-        last = getattr(self, '_last_diag_t', 0.0)
-        if now - last > 1.0:
-            self._last_diag_t = now
-            q_str = (
-                np.round(self.current_joint_state, 3).tolist()
-                if self.current_joint_state is not None else 'None'
-            )
-            self.get_logger().info(
-                f"cbf: ||nom||={nom_norm:.3f} ||filt||={filt_norm:.3f} q={q_str}"
-            )
+        t_fp1 = time.perf_counter()
 
         self.filtered_joint_velocity_pub.publish(filtered_msg)
+
+        # Accumulate per-cycle stats; emit a consolidated log line per window.
+        self._fp_count += 1
+        dt = t_fp1 - t_fp0
+        self._fp_total += dt
+        if dt > self._fp_max:
+            self._fp_max = dt
+        self._sum_sdf_time += getattr(self.controller, 'last_sdf_time', 0.0)
+        self._sum_sdf_calls += getattr(self.controller, 'last_sdf_calls', 0)
+        self._sum_pin_time += getattr(self.controller, 'last_pin_time', 0.0)
+        inner = getattr(self.controller, 'controller', None)
+        if inner is not None:
+            self._sum_mat_time += getattr(inner, 'last_matrix_time', 0.0)
+            self._sum_build_time += getattr(inner, 'last_build_time', 0.0)
+            self._sum_solve_time += getattr(inner, 'last_solve_time', 0.0)
+
+        nom_norm = float(np.linalg.norm(np.asarray(nominal_velocity)))
+        filt_norm = float(np.linalg.norm(np.asarray(filtered_msg.data)))
+        self._log_diag(nom_norm, filt_norm)
+
+    def _log_diag(self, nom_norm, filt_norm):
+        now = time.monotonic()
+        window = now - self._last_diag_t
+        if window < self._diag_window_s:
+            return
+
+        n = max(self._fp_count, 1)
+        js_age_ms = (
+            (now - self._last_js_recv_t) * 1e3
+            if self._last_js_recv_t is not None else float('inf')
+        )
+        nom_age_ms = (
+            (now - self._last_nom_recv_t) * 1e3
+            if self._last_nom_recv_t is not None else float('inf')
+        )
+        self.get_logger().info(
+            f"cbf rates [Hz]: "
+            f"js_rx={self._js_rx / window:.1f} "
+            f"nom_rx={self._nom_rx / window:.1f} "
+            f"tick={self._timer_ticks / window:.1f} "
+            f"pub={self._fp_count / window:.1f} "
+            f"stale={self._stale_pub / window:.1f} (js={self._js_stale_pub}, nom={self._nom_stale_pub}) | "
+            f"filter mean={self._fp_total / n * 1e3:.1f}ms "
+            f"max={self._fp_max * 1e3:.1f}ms "
+            f"(pin={self._sum_pin_time / n * 1e3:.1f}ms, "
+            f"sdf={self._sum_sdf_time / n * 1e3:.1f}ms x{self._sum_sdf_calls / n:.1f}, "
+            f"mat={self._sum_mat_time / n * 1e3:.1f}ms, "
+            f"cvxpy_build={self._sum_build_time / n * 1e3:.1f}ms, "
+            f"solve={self._sum_solve_time / n * 1e3:.1f}ms) | "
+            f"||nom||={nom_norm:.3f} ||filt||={filt_norm:.3f} | "
+            f"age js={js_age_ms:.0f}ms nom={nom_age_ms:.0f}ms | "
+            f"thread={threading.current_thread().name}"
+        )
+
+        self._last_diag_t = now
+        self._js_rx = 0
+        self._nom_rx = 0
+        self._timer_ticks = 0
+        self._fp_count = 0
+        self._stale_pub = 0
+        self._js_stale_pub = 0
+        self._nom_stale_pub = 0
+        self._fp_total = 0.0
+        self._fp_max = 0.0
+        self._sum_sdf_time = 0.0
+        self._sum_sdf_calls = 0
+        self._sum_pin_time = 0.0
+        self._sum_mat_time = 0.0
+        self._sum_build_time = 0.0
+        self._sum_solve_time = 0.0
 
 
 def main(args=None):

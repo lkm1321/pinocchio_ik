@@ -1,3 +1,5 @@
+import time
+
 import cvxpy as cp
 import numpy as np
 import pinocchio as pin
@@ -13,6 +15,13 @@ class QPCBF:
         self.update_matrices = update_method
         self.alpha_function = alpha_function
 
+        # Per-call timings populated by get_control(); read by callers for
+        # diagnostics (e.g. DistanceCBFNode's throttled rate/latency log).
+        self.last_matrix_time = 0.0
+        self.last_build_time = 0.0
+        self.last_solve_time = 0.0
+        self.last_total_time = 0.0
+
         # get_control rebuilds the cvxpy Problem from scratch each call, so
         # we do NOT need to size cp.Parameters here — and doing so eagerly
         # would force an SDF query at construction time, which is fragile
@@ -20,7 +29,9 @@ class QPCBF:
 
     def get_control(self, current_state, nominal_control_np):
 
+        t0 = time.perf_counter()
         A_matrix, b_vector, M_matrix = self.update_matrices(current_state)
+        t1 = time.perf_counter()
 
         # Per-joint velocity bound — without it the QP can emit wildly
         # unsafe values (40+ rad/s) when M_matrix is near-singular and the
@@ -36,8 +47,15 @@ class QPCBF:
             self.control >= -u_max,
         ]
         problem = cp.Problem(objective, constraints)
+        t2 = time.perf_counter()
 
         problem.solve(solver='osqp')
+        t3 = time.perf_counter()
+
+        self.last_matrix_time = t1 - t0
+        self.last_build_time = t2 - t1
+        self.last_solve_time = t3 - t2
+        self.last_total_time = t3 - t0
 
         if self.control.value is not None:
             return self.control.value
@@ -147,6 +165,12 @@ class PinocchioFKCBF:
             alpha_function=lambda x: 2.0 * x,
         )
 
+        # Per-call SDF stats populated by build_matrix(); read by callers
+        # for diagnostics.
+        self.last_sdf_calls = 0
+        self.last_sdf_time = 0.0
+        self.last_pin_time = 0.0
+
         self.get_control = self.controller.get_control
 
     @classmethod
@@ -244,8 +268,13 @@ class PinocchioFKCBF:
           in task space); otherwise M = I.
         """
 
+        self.last_sdf_calls = 0
+        self.last_sdf_time = 0.0
+
+        t_pin = time.perf_counter()
         pin.computeJointJacobians(self.model, self.data, configuration)
         pin.updateFramePlacements(self.model, self.data)
+        self.last_pin_time = time.perf_counter() - t_pin
 
         A_matrix = []
         b_vector = []
@@ -268,10 +297,16 @@ class PinocchioFKCBF:
             spatial_jacobian = spatial_jacobian[:, self.controlled_joint_idxs]
 
             if self.env_grad is not None:
+                t_sdf = time.perf_counter()
                 env_distance_values = self.env_sdf(sphere_pos_world) - self.sphere_radii[link_name]
                 env_grad_values = self.env_grad(sphere_pos_world)
+                self.last_sdf_time += time.perf_counter() - t_sdf
+                self.last_sdf_calls += 2
             else:
+                t_sdf = time.perf_counter()
                 env_distance_values, env_grad_values = self.env_sdf(sphere_pos_world)
+                self.last_sdf_time += time.perf_counter() - t_sdf
+                self.last_sdf_calls += 1
                 env_distance_values -= self.sphere_radii[link_name]
 
             distance_cross_product = np.cross(sphere_pos_world, env_grad_values)

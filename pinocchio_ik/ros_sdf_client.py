@@ -58,7 +58,17 @@ class RosSdfClient:
                 f"{wait_for_service_sec:.1f}s; calls will block until it appears."
             )
 
+        # Per-call latency stats; reset on each periodic log emission.
+        self._call_count = 0
+        self._call_points = 0
+        self._call_total = 0.0   # entry → done
+        self._call_wait = 0.0    # call_async → done (network/server)
+        self._call_max = 0.0
+        self._diag_window_s = 2.0
+        self._last_log_t = time.monotonic()
+
     def __call__(self, query_points):
+        t_enter = time.monotonic()
         query_points = np.asarray(query_points, dtype=np.float64)
         single = query_points.ndim == 1
         if single:
@@ -79,6 +89,7 @@ class RosSdfClient:
             if hasattr(req, flag):
                 setattr(req, flag, True)
 
+        t_sent = time.monotonic()
         future = self._client.call_async(req)
         # If we're already inside a spinning executor (the steady-state),
         # Event.wait() lets the executor thread dispatch the response. If we
@@ -104,6 +115,9 @@ class RosSdfClient:
                 rclpy.spin_once(spin_node, timeout_sec=min(0.1, remaining))
             else:
                 done.wait(min(0.1, remaining))
+
+        t_done = time.monotonic()
+        self._record_call(t_enter, t_sent, t_done, len(req.query_points))
 
         resp = future.result()
         if resp is None:
@@ -146,3 +160,35 @@ class RosSdfClient:
         if single:
             return distances[0], gradients[0]
         return distances, gradients
+
+    def _record_call(self, t_enter, t_sent, t_done, n_points):
+        """Update rolling latency stats and periodically log a summary."""
+        self._call_count += 1
+        self._call_points += n_points
+        dt = t_done - t_enter
+        wait = t_done - t_sent
+        self._call_total += dt
+        self._call_wait += wait
+        if dt > self._call_max:
+            self._call_max = dt
+
+        now = time.monotonic()
+        window = now - self._last_log_t
+        if window < self._diag_window_s:
+            return
+
+        n = max(self._call_count, 1)
+        self._node.get_logger().info(
+            f"sdf_client[{self._client.srv_name}]: "
+            f"calls={self._call_count} ({self._call_count / window:.1f}Hz), "
+            f"pts/call={self._call_points / n:.1f}, "
+            f"mean={self._call_total / n * 1e3:.1f}ms "
+            f"(wait={self._call_wait / n * 1e3:.1f}ms), "
+            f"max={self._call_max * 1e3:.1f}ms"
+        )
+        self._last_log_t = now
+        self._call_count = 0
+        self._call_points = 0
+        self._call_total = 0.0
+        self._call_wait = 0.0
+        self._call_max = 0.0
