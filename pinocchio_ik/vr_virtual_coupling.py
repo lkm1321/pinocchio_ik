@@ -45,6 +45,14 @@ class TwistPublisherNode(Node):
         self.ee_frame = self.get_parameter('ee_frame').value
         self.base_frame = self.get_parameter('base_frame').value
 
+        # Trigger deadman: hold the trigger to drive the robot. The trigger
+        # axis is analog (0.0 released → 1.0 fully pressed); cross this
+        # threshold to count as "engaged". Releasing freezes the robot and
+        # re-anchors the VR<->EE map on the next press (workspace
+        # re-indexing).
+        self.declare_parameter('trigger_threshold', 0.5)
+        self.trigger_threshold = float(self.get_parameter('trigger_threshold').value)
+
         # PD gains. Output is a velocity, so kp maps metres -> m/s, etc.
         # Higher kp = stiffer/faster catch-up; kd damps the catch-up.
         self.kp_lin, self.kd_lin = 4.0, 0.8
@@ -207,15 +215,19 @@ class TwistPublisherNode(Node):
             )
             return
 
-        # Clutch: hold grip to freeze the robot and reposition your hand;
-        # release to re-engage with a fresh offset (workspace re-indexing).
+        # Deadman: hold the trigger to drive. While released we publish
+        # zero and drop the engage offset so the next press re-anchors the
+        # VR<->EE map at the current EE pose (no jump on re-engage).
         inputs = self.controller.get_controller_inputs()
-        if inputs and inputs.get('grip_button', False):
-            self.offset_pos = None             # force re-capture on release
-            self._publish(Twist())             # zero velocity while clutched
+        trigger_pressed = (
+            bool(inputs) and inputs.get('trigger', 0.0) > self.trigger_threshold
+        )
+        if not trigger_pressed:
+            self.offset_pos = None             # force re-capture on next press
+            self._publish(Twist())             # zero velocity while released
             return
 
-        if self.offset_pos is None:            # first tick, or just un-clutched
+        if self.offset_pos is None:            # first tick after a fresh press
             self._capture_offset(vr_pos, vr_rot)
 
         # Reference pose = VR pose mapped through the engage-time offset.

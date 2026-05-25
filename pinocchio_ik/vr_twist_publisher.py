@@ -4,6 +4,10 @@ from geometry_msgs.msg import Twist, PoseStamped
 import pinocchio_ik.triad_openvr as vr
 
 class TwistPublisherNode(Node):
+    # Trigger axis is analog (0.0 released → 1.0 fully pressed); treat any
+    # press past this fraction as "deadman engaged".
+    TRIGGER_THRESHOLD = 0.5
+
     def __init__(self):
         super().__init__('twist_publisher')
         self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -15,18 +19,21 @@ class TwistPublisherNode(Node):
 
 
     def timer_callback(self):
+        # Deadman: only forward live twists while the trigger is held.
+        # Publish zero on release so the downstream controller halts
+        # rather than holding the last non-zero command.
+        inputs = self.controller.get_controller_inputs()
+        trigger_pressed = bool(inputs) and inputs.get('trigger', 0.0) > self.TRIGGER_THRESHOLD
+        if not trigger_pressed:
+            self.publisher.publish(Twist())
+            return
+
         msg = Twist()
         linear_vel = self.controller.get_velocity()
         angular_vel = self.controller.get_angular_velocity()
         if linear_vel is None or angular_vel is None:
+            self.publisher.publish(Twist())
             return
-
-        # msg.linear.x = linear_vel[0]
-        # msg.linear.y = linear_vel[1]
-        # msg.linear.z = linear_vel[2]
-        # msg.angular.x = angular_vel[0]
-        # msg.angular.y = angular_vel[1]
-        # msg.angular.z = angular_vel[2]
 
         # jumble coordinate from openvr to forward - left - up
         msg.linear.x =  linear_vel[2]

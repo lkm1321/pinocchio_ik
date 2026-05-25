@@ -40,6 +40,7 @@ def main(args=None):
     sdf_node.declare_parameter('urdf_path', _DEFAULT_URDF_PATH)
     sdf_node.declare_parameter('controlled_joint_names', _DEFAULT_JOINT_NAMES)
     sdf_node.declare_parameter('ee_frame_name', _DEFAULT_EE_FRAME)
+    sdf_node.declare_parameter('alpha_gain', 2.0)
 
     sdf_cb_group = MutuallyExclusiveCallbackGroup()
 
@@ -57,12 +58,14 @@ def main(args=None):
         sdf_node.get_parameter('controlled_joint_names').get_parameter_value().string_array_value
     ) or list(_DEFAULT_JOINT_NAMES)
     ee_frame_name = sdf_node.get_parameter('ee_frame_name').get_parameter_value().string_value
+    alpha_gain = sdf_node.get_parameter('alpha_gain').get_parameter_value().double_value
 
     cbf_node = DistanceCBFNode(
         sdf_client,
         urdf_path=urdf_path,
         controlled_joint_names=controlled_joint_names,
         ee_frame_name=ee_frame_name,
+        alpha_gain=alpha_gain,
     )
 
     executor = MultiThreadedExecutor()

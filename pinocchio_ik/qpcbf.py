@@ -142,6 +142,7 @@ class PinocchioFKCBF:
         env_grad=None,
         controlled_joint_names=None,
         ee_frame_name=None,
+        alpha_gain=2.0,
     ):
         self.env_sdf = env_sdf
         self.env_grad = env_grad
@@ -158,11 +159,15 @@ class PinocchioFKCBF:
 
         self.urdf_model = urdf_model
         self.sphere_positions, self.sphere_radii = extract_spheres_from_urdf(self.urdf_model)
+        # CBF class-K function: alpha(h) = alpha_gain * h. Larger gain ⇒ less
+        # conservative (robot brakes only near contact); smaller ⇒ wider
+        # standoff but mushier feel. See build_matrix docstring.
+        self.alpha_gain = float(alpha_gain)
         self.controller = QPCBF(
             nu=len(self.controlled_joint_idxs),
             update_method=self.build_matrix,
             nx=len(self.controlled_joint_idxs),
-            alpha_function=lambda x: 2.0 * x,
+            alpha_function=lambda x: self.alpha_gain * x,
         )
 
         # Per-call SDF stats populated by build_matrix(); read by callers
@@ -174,7 +179,7 @@ class PinocchioFKCBF:
         self.get_control = self.controller.get_control
 
     @classmethod
-    def from_urdf_file(cls, urdf_file, env_sdf, env_grad=None, controlled_joint_names=None, ee_frame_name=None):
+    def from_urdf_file(cls, urdf_file, env_sdf, env_grad=None, controlled_joint_names=None, ee_frame_name=None, alpha_gain=2.0):
         return cls(
             pin.buildModelFromUrdf(urdf_file),
             urdf.URDF.from_xml_file(urdf_file),
@@ -182,6 +187,7 @@ class PinocchioFKCBF:
             env_grad=env_grad,
             controlled_joint_names=controlled_joint_names,
             ee_frame_name=ee_frame_name,
+            alpha_gain=alpha_gain,
         )
 
     def get_frame_pose(self, frame_name: str):

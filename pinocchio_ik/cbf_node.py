@@ -186,6 +186,7 @@ class DistanceCBFNode(Node):
         urdf_path=_DEFAULT_URDF_PATH,
         controlled_joint_names=None,
         ee_frame_name=_DEFAULT_EE_FRAME,
+        alpha_gain=2.0,
     ):
         super().__init__('distance_cbf_node')
         self.get_logger().info('DistanceCBFNode has been started.')
@@ -198,6 +199,8 @@ class DistanceCBFNode(Node):
             else list(_DEFAULT_JOINT_NAMES)
         )
         self.ee_frame_name = ee_frame_name
+        self.alpha_gain = float(alpha_gain)
+        self.get_logger().info(f"CBF alpha_gain = {self.alpha_gain}")
 
         self.controller_args = controller_args
 
@@ -209,6 +212,7 @@ class DistanceCBFNode(Node):
                 *self.controller_args,
                 controlled_joint_names=self.controlled_joint_names,
                 ee_frame_name=self.ee_frame_name,
+                alpha_gain=self.alpha_gain,
             )
         else:
             urdf_str = self.get_parameter('robot_description').get_parameter_value().string_value
@@ -307,6 +311,7 @@ class DistanceCBFNode(Node):
                 *self.controller_args,
                 controlled_joint_names=self.controlled_joint_names,
                 ee_frame_name=self.ee_frame_name,
+                alpha_gain=self.alpha_gain,
             )
 
     def joint_state_callback(self, msg: JointState):
