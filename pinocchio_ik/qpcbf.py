@@ -197,11 +197,15 @@ class PinocchioFKCBF:
         # last_sphere_dist:   (N,)   raw SDF value at sphere center (no radius subtraction)
         # last_sphere_grad:   (N, 3) SDF gradient at sphere center; nearest
         #                            obstacle point is pos - dist * grad.
+        # last_A:             (N, n_u) per-sphere CBF inequality row; the
+        #                              full constraint is A·q̇ + b ≥ 0 where
+        #                              b is last_sphere_h.
         self.last_sphere_pos = None
         self.last_sphere_radii = None
         self.last_sphere_h = None
         self.last_sphere_dist = None
         self.last_sphere_grad = None
+        self.last_A = None
 
         self.get_control = self.controller.get_control
 
@@ -383,4 +387,7 @@ class PinocchioFKCBF:
         else:
             M_matrix = np.eye(len(self.controlled_joint_idxs))
 
-        return np.concatenate(A_matrix, axis=0), np.concatenate(b_vector, axis=0), M_matrix
+        A_concat = np.concatenate(A_matrix, axis=0)
+        b_concat = np.concatenate(b_vector, axis=0)
+        self.last_A = A_concat
+        return A_concat, b_concat, M_matrix

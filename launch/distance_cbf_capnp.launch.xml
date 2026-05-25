@@ -38,8 +38,8 @@
          description="Sphere clearance (m) at or above which markers fade to black (safe)." />
     <arg name="sphere_marker_rate_hz" default="20.0"
          description="Max publish rate for the marker topic; set 0 to disable." />
-    <arg name="active_dual_threshold" default="1e-4"
-         description="CBF dual-variable threshold above which a constraint counts as 'active' for the green line-list visualization." />
+    <arg name="active_constraint_threshold" default="0.0"
+         description="A·u_nom + b threshold below which a constraint counts as 'active' (would be violated by the nominal command). Default 0 = strict violation." />
 
     <node pkg="pinocchio_ik" exec="distance_cbf_capnp" output="screen">
         <param name="urdf_path" value="$(var urdf_path)"/>
@@ -57,7 +57,7 @@
         <param name="sphere_marker_d_red" value="$(var sphere_marker_d_red)"/>
         <param name="sphere_marker_d_black" value="$(var sphere_marker_d_black)"/>
         <param name="sphere_marker_rate_hz" value="$(var sphere_marker_rate_hz)"/>
-        <param name="active_dual_threshold" value="$(var active_dual_threshold)"/>
+        <param name="active_constraint_threshold" value="$(var active_constraint_threshold)"/>
 
         <remap from="joint_states" to="$(var joint_states_topic)"/>
         <remap from="filtered_joint_velocity" to="$(var filtered_cmd_topic)"/>

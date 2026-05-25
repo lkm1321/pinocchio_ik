@@ -277,12 +277,14 @@ class DistanceCBFNode(Node):
         self.declare_parameter('sphere_marker_d_red', 0.1)
         self.declare_parameter('sphere_marker_d_black', 2.0)
         self.declare_parameter('sphere_marker_rate_hz', 20.0)
-        # Dual-variable threshold for "active" CBF constraints. cvxpy returns
-        # dual_value ≥ 0 on a `>= 0` inequality; strictly-positive duals are
-        # binding. The threshold rejects numerical noise from OSQP.
-        self.declare_parameter('active_dual_threshold', 1e-4)
-        self.active_dual_threshold = float(
-            self.get_parameter('active_dual_threshold').value
+        # "Active" CBF constraint = one that the nominal command would
+        # violate: A_i · u_nom + b_i < active_constraint_threshold.
+        # Default 0 ⇒ any strict violation. A small positive value (e.g.
+        # 1e-3) widens to "would nearly violate". Computed directly from
+        # the stashed A and b — independent of the QP solver's duals.
+        self.declare_parameter('active_constraint_threshold', 0.0)
+        self.active_constraint_threshold = float(
+            self.get_parameter('active_constraint_threshold').value
         )
         self.publish_sphere_markers = bool(
             self.get_parameter('publish_sphere_markers').value
@@ -476,9 +478,9 @@ class DistanceCBFNode(Node):
         self._last_nom_norm = float(np.linalg.norm(np.asarray(nominal_velocity)))
         self._last_filt_norm = float(np.linalg.norm(np.asarray(filtered_msg.data)))
 
-        self._maybe_publish_sphere_markers()
+        self._maybe_publish_sphere_markers(nominal_velocity)
 
-    def _maybe_publish_sphere_markers(self):
+    def _maybe_publish_sphere_markers(self, nominal_velocity):
         if self.sphere_marker_pub is None:
             return
         now = time.monotonic()
@@ -517,30 +519,37 @@ class DistanceCBFNode(Node):
             arr.markers.append(m)
 
         active_marker = self._build_active_constraint_marker(
-            pos, frame_id, stamp,
+            pos, nominal_velocity, frame_id, stamp,
         )
         if active_marker is not None:
             arr.markers.append(active_marker)
 
         self.sphere_marker_pub.publish(arr)
 
-    def _build_active_constraint_marker(self, pos, frame_id, stamp):
+    def _build_active_constraint_marker(self, pos, nominal_velocity, frame_id, stamp):
         """LINE_LIST from each active sphere center to its nearest obstacle.
 
-        Active = the per-sphere CBF inequality has strictly-positive dual.
-        Nearest obstacle point is `pos - dist * grad` (signed distance
-        retracted along the SDF gradient). Returns None if the QP didn't
-        produce duals (e.g. infeasible) or if the SDF data isn't available.
+        Active = the per-sphere CBF inequality `A_i · u_nom + b_i ≥ 0` is
+        violated (strictly negative under the default threshold). We
+        compute this ourselves from `last_A` and `last_sphere_h`, which is
+        independent of the QP solver and robust to OSQP not surfacing dual
+        values reliably.
 
-        Always returns *some* marker (DELETE when nothing is active) so
-        previously-rendered lines vanish from RViz the moment the
-        constraint stops binding.
+        Nearest obstacle point is `pos - dist * grad` (retract along the
+        SDF gradient by the signed-distance magnitude). Returns None if
+        the required state isn't stashed yet. Always returns *some* marker
+        (DELETE when nothing is active) so previously-rendered lines
+        vanish from RViz the moment the constraint stops binding.
         """
+        A = getattr(self.controller, 'last_A', None)
+        b = getattr(self.controller, 'last_sphere_h', None)
         dist = getattr(self.controller, 'last_sphere_dist', None)
         grad = getattr(self.controller, 'last_sphere_grad', None)
-        inner = getattr(self.controller, 'controller', None)
-        dual = getattr(inner, 'last_cbf_dual', None) if inner is not None else None
-        if dist is None or grad is None or dual is None:
+        if A is None or b is None or dist is None or grad is None:
+            return None
+
+        u_nom = np.asarray(nominal_velocity, dtype=float)
+        if u_nom.ndim != 1 or u_nom.shape[0] != A.shape[1]:
             return None
 
         marker = Marker()
@@ -556,11 +565,8 @@ class DistanceCBFNode(Node):
         marker.color.b = 0.2
         marker.color.a = 1.0
 
-        dual_arr = np.asarray(dual, dtype=float)
-        if dual_arr.shape != (len(pos),):
-            return None
-
-        active_idxs = np.where(dual_arr > self.active_dual_threshold)[0]
+        slack = A @ u_nom + b                                  # (N,)
+        active_idxs = np.where(slack < self.active_constraint_threshold)[0]
         if active_idxs.size == 0:
             marker.action = Marker.DELETE
             return marker
