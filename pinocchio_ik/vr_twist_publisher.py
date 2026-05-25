@@ -9,11 +9,12 @@ import pinocchio_ik.triad_openvr as vr
 
 
 # --- OpenVR frame -> robot frame (forward-left-up) -------------------------
-# (x, y, z)_robot = (z, -x, -y)_vr
+# (x, y, z)_robot = (z, x, y)_vr
+# See VR_TO_ROBOT in vr_virtual_coupling.py for why y and z are positive.
 VR_TO_ROBOT = np.array([
     [ 0.0,  0.0,  1.0],
-    [-1.0,  0.0,  0.0],
-    [ 0.0, -1.0,  0.0],
+    [ 1.0,  0.0,  0.0],
+    [ 0.0,  1.0,  0.0],
 ])
 
 
@@ -41,6 +42,17 @@ class TwistPublisherNode(Node):
         # leaves both components live.
         self.declare_parameter('trackpad_deadzone', 0.3)
         self.trackpad_deadzone = float(self.get_parameter('trackpad_deadzone').value)
+
+        # Output scaling + saturation. Norm-preserving clip preserves the
+        # twist direction at saturation (diagonal motion stays diagonal).
+        self.declare_parameter('gain_lin', 0.5)
+        self.declare_parameter('gain_ang', 0.2)
+        self.declare_parameter('max_lin_vel', 0.3)   # m/s
+        self.declare_parameter('max_ang_vel', 1.0)   # rad/s
+        self.gain_lin = float(self.get_parameter('gain_lin').value)
+        self.gain_ang = float(self.get_parameter('gain_ang').value)
+        self.max_lin_vel = float(self.get_parameter('max_lin_vel').value)
+        self.max_ang_vel = float(self.get_parameter('max_ang_vel').value)
 
         self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
 
@@ -100,6 +112,10 @@ class TwistPublisherNode(Node):
         if suppress_orient:
             ang = np.zeros(3)
 
+        # Gain + norm-preserving clip (direction preserved at saturation).
+        lin = self._clamp(self.gain_lin * lin, self.max_lin_vel)
+        ang = self._clamp(self.gain_ang * ang, self.max_ang_vel)
+
         if not self.is_world:
             ee_rot = self._ee_rot()
             if ee_rot is None:
@@ -128,6 +144,12 @@ class TwistPublisherNode(Node):
         if x >  self.trackpad_deadzone:
             return False, True
         return False, False
+
+    @staticmethod
+    def _clamp(vec, max_norm):
+        """Cap ||vec|| at max_norm without changing direction."""
+        n = float(np.linalg.norm(vec))
+        return vec * (max_norm / n) if n > max_norm else vec
 
 
 def main(args=None):

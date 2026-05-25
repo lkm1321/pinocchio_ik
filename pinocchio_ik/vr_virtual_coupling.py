@@ -11,11 +11,17 @@ from scipy.spatial.transform import Rotation as Rot
 import pinocchio_ik.triad_openvr as vr
 
 # --- OpenVR frame -> robot frame (forward-left-up) -------------------------
-# (x, y, z)_robot = (z, -x, -y)_vr   [taken straight from the original stub]
+# (x, y, z)_robot = (z, x, y)_vr
+# Verified empirically against the room layout: the original stub had
+# negative signs on y/z which only "worked" because vr_virtual_coupling
+# also rotated into the EE frame and the xArm6 stick EE happens to sit
+# ~180° around x from the base, accidentally cancelling the bad signs.
+# This matrix maps the physical room frame to the robot base frame and
+# is independent of EE pose, so it's correct for both is_world modes.
 VR_TO_ROBOT = np.array([
     [ 0.0,  0.0,  1.0],
-    [-1.0,  0.0,  0.0],
-    [ 0.0, -1.0,  0.0],
+    [ 1.0,  0.0,  0.0],
+    [ 0.0,  1.0,  0.0],
 ])
 VR_TO_ROBOT_ROT = Rot.from_matrix(VR_TO_ROBOT)
 
@@ -78,6 +84,21 @@ class TwistPublisherNode(Node):
         # Higher kp = stiffer/faster catch-up; kd damps the catch-up.
         self.kp_lin, self.kd_lin = 4.0, 0.8
         self.kp_ang, self.kd_ang = 4.0, 0.8
+
+        # Output scaling + saturation. The fixed gains throttle the overall
+        # response (so the operator can dial in a comfortable "feel"
+        # independent of the PD law), and the max-velocity clamps bound the
+        # commanded twist regardless of error/feedforward. Clipping uses a
+        # norm-preserving scale (direction kept, magnitude capped) so the
+        # twist direction matches the operator's intent even at saturation.
+        self.declare_parameter('gain_lin', 0.5)
+        self.declare_parameter('gain_ang', 0.2)
+        self.declare_parameter('max_lin_vel', 0.3)   # m/s
+        self.declare_parameter('max_ang_vel', 1.0)   # rad/s
+        self.gain_lin = float(self.get_parameter('gain_lin').value)
+        self.gain_ang = float(self.get_parameter('gain_ang').value)
+        self.max_lin_vel = float(self.get_parameter('max_lin_vel').value)
+        self.max_ang_vel = float(self.get_parameter('max_ang_vel').value)
 
         # Divergence clamp: the largest "spring stretch" allowed while the
         # EE is collision-blocked. Bounds the catch-up speed on release
@@ -311,6 +332,13 @@ class TwistPublisherNode(Node):
         # PD + feedforward. Everything above is computed in the base frame.
         cmd_lin = lin_ff + self.kp_lin * pos_err + self.kd_lin * self.pos_err_dot
         cmd_ang = ang_ff + self.kp_ang * ang_err + self.kd_ang * self.ang_err_dot
+
+        # Output gain + saturation. Norm-preserving clip keeps the twist
+        # direction fixed when the magnitude exceeds the limit, so diagonal
+        # motion stays diagonal at saturation instead of getting pulled onto
+        # whichever axis is saturating first.
+        cmd_lin = self._clamp(self.gain_lin * cmd_lin, self.max_lin_vel)
+        cmd_ang = self._clamp(self.gain_ang * cmd_ang, self.max_ang_vel)
 
         # Express the twist in the consumer's frame. is_world=true → keep
         # base-frame; is_world=false → rotate into the EE frame by R_ee^-1
