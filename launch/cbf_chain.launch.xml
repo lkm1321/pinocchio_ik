@@ -1,0 +1,72 @@
+<launch>
+  <!-- The full SDF-CBF control chain for a single robot:
+
+         desired_twist  →  velocity_ik  →  nominal joint-vel  →
+                           distance_cbf_service  →  filtered joint-vel  →
+                           velocity_controller
+
+       Both velocity_ik and distance_cbf_service have watchdogs that
+       fall back to zero command if their control loop stalls.
+
+       Defaults match the real xArm6 deploy (unprefixed joints,
+       /joint_states, /cmd_vel). Override the args to point at a
+       prefixed setup (e.g. xarm6_ in the Gazebo world). -->
+
+  <!-- Robot config -->
+  <arg name="end_effector_link" default="link6"
+       description="EE link the IK targets (in the live robot's URDF)." />
+  <arg name="controlled_joint_names"
+       default="[joint1, joint2, joint3, joint4, joint5, joint6]" />
+  <arg name="urdf_path"
+       default="/keti_ws/src/pinocchio_ik/launch/xarm6_with_gripper_spherized.urdf"
+       description="Spherized URDF used by the CBF for FK + collision spheres." />
+  <arg name="ee_frame_name" default="xarm6_ee_tip"
+       description="Frame inside the spherized URDF used as the CBF query point." />
+
+  <!-- Topic wiring -->
+  <arg name="desired_twist_topic"        default="/cmd_vel" />
+  <arg name="joint_states_topic"         default="/joint_states" />
+  <arg name="nominal_cmd_topic"          default="/velocity_controller/commands_nominal" />
+  <arg name="filtered_cmd_topic"         default="/velocity_controller/commands" />
+  <arg name="sdf_query_topic"            default="/sdf_query" />
+  <arg name="robot_description_topic"    default="/robot_description" />
+
+  <!-- Tuning -->
+  <arg name="rate" default="100.0" />
+  <arg name="is_world" default="true" />
+  <arg name="use_sim_time" default="false" />
+  <arg name="watchdog_timeout_sec" default="0.0" />
+  <arg name="sdf_timeout_sec" default="15.0"
+       description="Per-SDF-call timeout. The first query inside the CBF
+                    construction can take a few seconds while the mapping
+                    node warms up." />
+  <arg name="sdf_wait_for_service_sec" default="60.0" />
+
+  <!-- 1) Cartesian twist → joint-velocity nominal -->
+  <include file="$(find-pkg-share pinocchio_ik)/launch/velocity_ik.launch.xml">
+    <arg name="end_effector_link"        value="$(var end_effector_link)"/>
+    <arg name="rate"                     value="$(var rate)"/>
+    <arg name="is_world"                 value="$(var is_world)"/>
+    <arg name="use_sim_time"             value="$(var use_sim_time)"/>
+    <arg name="watchdog_timeout_sec"     value="$(var watchdog_timeout_sec)"/>
+    <arg name="controlled_joint_names"   value="$(var controlled_joint_names)"/>
+    <arg name="desired_twist_topic"      value="$(var desired_twist_topic)"/>
+    <arg name="joint_states_topic"       value="$(var joint_states_topic)"/>
+    <arg name="joint_velocity_cmd_topic" value="$(var nominal_cmd_topic)"/>
+    <arg name="robot_description_topic"  value="$(var robot_description_topic)"/>
+  </include>
+
+  <!-- 2) GP-SDF QP filter: nominal joint-vel → filtered joint-vel -->
+  <include file="$(find-pkg-share pinocchio_ik)/launch/distance_cbf_service.launch.xml">
+    <arg name="urdf_path"                value="$(var urdf_path)"/>
+    <arg name="controlled_joint_names"   value="$(var controlled_joint_names)"/>
+    <arg name="ee_frame_name"            value="$(var ee_frame_name)"/>
+    <arg name="sdf_query_topic"          value="$(var sdf_query_topic)"/>
+    <arg name="joint_states_topic"       value="$(var joint_states_topic)"/>
+    <arg name="filtered_cmd_topic"       value="$(var filtered_cmd_topic)"/>
+    <arg name="nominal_cmd_topic"        value="$(var nominal_cmd_topic)"/>
+    <arg name="use_sim_time"             value="$(var use_sim_time)"/>
+    <arg name="sdf_timeout_sec"          value="$(var sdf_timeout_sec)"/>
+    <arg name="sdf_wait_for_service_sec" value="$(var sdf_wait_for_service_sec)"/>
+  </include>
+</launch>
