@@ -276,13 +276,17 @@ class PinocchioFKCBF:
         pin.updateFramePlacements(self.model, self.data)
         self.last_pin_time = time.perf_counter() - t_pin
 
-        A_matrix = []
-        b_vector = []
+        # Gather per-link spheres + Jacobians first, then make ONE batched
+        # env_sdf call on the concatenated point cloud. The SDF backend is
+        # typically a service round-trip whose cost is dominated by the
+        # round-trip itself, not by the payload size, so collapsing N
+        # per-link calls into 1 is a big win.
+        per_link = []           # (sphere_pos_world, spatial_jacobian, radii)
+        all_sphere_pos = []
 
         for link_name in self.urdf_model.link_map.keys():
             if link_name == self.urdf_model.get_root():
                 continue
-
             if link_name not in self.sphere_positions:
                 continue
             if self.sphere_positions[link_name].size == 0:
@@ -296,28 +300,41 @@ class PinocchioFKCBF:
             spatial_jacobian = self.get_frame_jacobian(link_name)
             spatial_jacobian = spatial_jacobian[:, self.controlled_joint_idxs]
 
+            per_link.append((sphere_pos_world, spatial_jacobian, self.sphere_radii[link_name]))
+            all_sphere_pos.append(sphere_pos_world)
+
+        A_matrix = []
+        b_vector = []
+
+        if all_sphere_pos:
+            batched_pos = np.concatenate(all_sphere_pos, axis=0)  # (sum_N, 3)
+
+            t_sdf = time.perf_counter()
             if self.env_grad is not None:
-                t_sdf = time.perf_counter()
-                env_distance_values = self.env_sdf(sphere_pos_world) - self.sphere_radii[link_name]
-                env_grad_values = self.env_grad(sphere_pos_world)
-                self.last_sdf_time += time.perf_counter() - t_sdf
+                batched_dist = self.env_sdf(batched_pos)
+                batched_grad = self.env_grad(batched_pos)
                 self.last_sdf_calls += 2
             else:
-                t_sdf = time.perf_counter()
-                env_distance_values, env_grad_values = self.env_sdf(sphere_pos_world)
-                self.last_sdf_time += time.perf_counter() - t_sdf
+                batched_dist, batched_grad = self.env_sdf(batched_pos)
                 self.last_sdf_calls += 1
-                env_distance_values -= self.sphere_radii[link_name]
+            self.last_sdf_time += time.perf_counter() - t_sdf
 
-            distance_cross_product = np.cross(sphere_pos_world, env_grad_values)
+            cursor = 0
+            for sphere_pos_world, spatial_jacobian, radii in per_link:
+                n = sphere_pos_world.shape[0]
+                env_distance_values = batched_dist[cursor:cursor + n] - radii
+                env_grad_values = batched_grad[cursor:cursor + n]
+                cursor += n
 
-            vel = spatial_jacobian[:3, :]
-            omega = spatial_jacobian[3:, :]
+                distance_cross_product = np.cross(sphere_pos_world, env_grad_values)
 
-            partial_d_partial_theta = (distance_cross_product @ omega + env_grad_values @ vel)
+                vel = spatial_jacobian[:3, :]
+                omega = spatial_jacobian[3:, :]
 
-            A_matrix.append(partial_d_partial_theta)
-            b_vector.append(env_distance_values)
+                partial_d_partial_theta = (distance_cross_product @ omega + env_grad_values @ vel)
+
+                A_matrix.append(partial_d_partial_theta)
+                b_vector.append(env_distance_values)
 
         if self.ee_frame_name is not None:
             ee_jacobian = self.get_frame_jacobian(self.ee_frame_name)
