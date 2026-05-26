@@ -188,7 +188,7 @@ class DistanceCBFNode(Node):
         urdf_path=_DEFAULT_URDF_PATH,
         controlled_joint_names=None,
         ee_frame_name=_DEFAULT_EE_FRAME,
-        alpha_gain=2.0,
+        alpha_gain=0.1,
     ):
         super().__init__('distance_cbf_node')
         self.get_logger().info('DistanceCBFNode has been started.')
